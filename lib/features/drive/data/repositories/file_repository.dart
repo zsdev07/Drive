@@ -159,7 +159,7 @@ class FileRepository {
     final files = await (_db.select(_db.fileItems)
           ..where((t) => t.isDeleted.equals(false)))
         .get();
-    return files.fold(0, (sum, f) => sum + f.sizeBytes);
+    return files.fold<int>(0, (sum, f) => sum + f.sizeBytes);
   }
 }
 

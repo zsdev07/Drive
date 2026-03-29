@@ -1,0 +1,50 @@
+name: ZX Project Build
+
+on: 
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Allows you to run it manually from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Set up Java (Required for Flutter/Android)
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 3. Set up Flutter
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      # 4. Extract your project zip
+      - name: Extract Project
+        run: unzip zx.zip -d .
+
+      # 5. Run your specific commands
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Run Build Runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # 6. Build the APK (Since 'flutter run' won't work on a server)
+      - name: Build APK
+        run: flutter build apk --debug
+
+      # 7. Upload the result so you can download it
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: zx-app-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk

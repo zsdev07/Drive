@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:open_file/open_file.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../data/repositories/file_repository.dart';
@@ -13,61 +14,121 @@ class FileCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final fileType = ZXFileTypeX.fromMime(file.mimeType);
+    final selectedUuids = ref.watch(selectionProvider);
+    final isSelectionMode = selectedUuids.isNotEmpty;
+    final isSelected = selectedUuids.contains(file.uuid);
 
     return GestureDetector(
-      onLongPress: () => _showOptions(context, ref),
-      child: Container(
+      onTap: () {
+        if (isSelectionMode) {
+          ref.read(selectionProvider.notifier).toggle(file.uuid);
+        }
+        // When not in selection mode, tapping does nothing (long-press for options)
+      },
+      onLongPress: () {
+        if (!isSelectionMode) {
+          // Enter selection mode with this file selected
+          ref.read(selectionProvider.notifier).toggle(file.uuid);
+        } else {
+          _showOptions(context, ref);
+        }
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
         decoration: BoxDecoration(
-          color: AppTheme.bgCard,
+          color: isSelected
+              ? AppTheme.primary.withOpacity(0.15)
+              : AppTheme.bgCard,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.white.withOpacity(0.05), width: 1),
+          border: Border.all(
+            color: isSelected
+                ? AppTheme.primary
+                : Colors.white.withOpacity(0.05),
+            width: isSelected ? 2 : 1,
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Stack(
           children: [
-            // Thumbnail area
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: _typeColor(fileType).withOpacity(0.1),
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                ),
-                child: Stack(
-                  children: [
-                    Center(child: Icon(_typeIcon(fileType), color: _typeColor(fileType), size: 48)),
-                    if (file.isStarred)
-                      const Positioned(
-                        top: 8, right: 8,
-                        child: Icon(Icons.star_rounded, color: AppTheme.warning, size: 18),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            // Info area
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    file.name,
-                    style: const TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Thumbnail area
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: _typeColor(fileType).withOpacity(0.1),
+                      borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(16)),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    child: Stack(
+                      children: [
+                        Center(
+                          child: Icon(_typeIcon(fileType),
+                              color: _typeColor(fileType), size: 48),
+                        ),
+                        if (file.isStarred)
+                          const Positioned(
+                            top: 8,
+                            right: 8,
+                            child: Icon(Icons.star_rounded,
+                                color: AppTheme.warning, size: 18),
+                          ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _formatSize(file.sizeBytes),
-                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                ),
+                // Info area
+                Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        file.name,
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatSize(file.sizeBytes),
+                        style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 11),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
+            // Selection checkmark overlay
+            if (isSelectionMode)
+              Positioned(
+                top: 8,
+                left: 8,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppTheme.primary : Colors.transparent,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: isSelected
+                          ? AppTheme.primary
+                          : AppTheme.textSecondary,
+                      width: 2,
+                    ),
+                  ),
+                  child: isSelected
+                      ? const Icon(Icons.check_rounded,
+                          color: Colors.white, size: 14)
+                      : null,
+                ),
+              ),
           ],
         ),
       ),
@@ -88,7 +149,8 @@ class FileCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                 color: AppTheme.textSecondary.withOpacity(0.3),
                 borderRadius: BorderRadius.circular(2),
@@ -96,11 +158,14 @@ class FileCard extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
               child: Row(
                 children: [
-                  Icon(_typeIcon(ZXFileTypeX.fromMime(file.mimeType)),
-                      color: _typeColor(ZXFileTypeX.fromMime(file.mimeType)), size: 20),
+                  Icon(
+                      _typeIcon(ZXFileTypeX.fromMime(file.mimeType)),
+                      color: _typeColor(ZXFileTypeX.fromMime(file.mimeType)),
+                      size: 20),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(file.name,
@@ -116,25 +181,25 @@ class FileCard extends ConsumerWidget {
             ),
             const Divider(color: AppTheme.bgSurface),
             ListTile(
-              leading: const Icon(Icons.download_rounded, color: AppTheme.primary),
-              title: const Text('Download', style: TextStyle(color: AppTheme.textPrimary)),
+              leading:
+                  const Icon(Icons.download_rounded, color: AppTheme.primary),
+              title: const Text('Download',
+                  style: TextStyle(color: AppTheme.textPrimary)),
+              subtitle: file.sizeBytes > 20 * 1024 * 1024
+                  ? const Text('File > 20 MB — Bot API limit',
+                      style:
+                          TextStyle(color: AppTheme.warning, fontSize: 11))
+                  : null,
               onTap: () async {
                 Navigator.pop(context);
-                try {
-                  await repo.downloadFile(file: file);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Downloaded successfully!')),
-                  );
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Download failed: $e')),
-                  );
-                }
+                await _downloadFile(context, repo);
               },
             ),
             ListTile(
               leading: Icon(
-                file.isStarred ? Icons.star_border_rounded : Icons.star_rounded,
+                file.isStarred
+                    ? Icons.star_border_rounded
+                    : Icons.star_rounded,
                 color: AppTheme.warning,
               ),
               title: Text(
@@ -147,16 +212,20 @@ class FileCard extends ConsumerWidget {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.edit_rounded, color: AppTheme.accent),
-              title: const Text('Rename', style: TextStyle(color: AppTheme.textPrimary)),
+              leading:
+                  const Icon(Icons.edit_rounded, color: AppTheme.accent),
+              title: const Text('Rename',
+                  style: TextStyle(color: AppTheme.textPrimary)),
               onTap: () {
                 Navigator.pop(context);
                 _showRenameDialog(context, repo);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.delete_rounded, color: AppTheme.error),
-              title: const Text('Delete', style: TextStyle(color: AppTheme.error)),
+              leading:
+                  const Icon(Icons.delete_rounded, color: AppTheme.error),
+              title: const Text('Delete',
+                  style: TextStyle(color: AppTheme.error)),
               onTap: () {
                 repo.deleteFile(file);
                 Navigator.pop(context);
@@ -168,25 +237,73 @@ class FileCard extends ConsumerWidget {
     );
   }
 
+  Future<void> _downloadFile(
+      BuildContext context, FileRepository repo) async {
+    // Show loading snackbar
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: Colors.white),
+          ),
+          SizedBox(width: 12),
+          Text('Downloading...'),
+        ]),
+        duration: Duration(seconds: 60),
+      ),
+    );
+
+    try {
+      final savePath = await repo.downloadFile(file: file);
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Saved to $savePath'),
+          action: SnackBarAction(
+            label: 'OPEN',
+            onPressed: () => OpenFile.open(savePath),
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString()),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
   void _showRenameDialog(BuildContext context, FileRepository repo) {
     final controller = TextEditingController(text: file.name);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.bgCard,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Rename File',
-            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
+            style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontWeight: FontWeight.w700)),
         content: TextField(
           controller: controller,
           autofocus: true,
           style: const TextStyle(color: AppTheme.textPrimary),
-          decoration: const InputDecoration(hintText: 'File name'),
+          decoration:
+              const InputDecoration(hintText: 'File name'),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppTheme.textSecondary)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -204,30 +321,46 @@ class FileCard extends ConsumerWidget {
 
   IconData _typeIcon(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image: return Icons.image_rounded;
-      case ZXFileType.video: return Icons.play_circle_rounded;
-      case ZXFileType.audio: return Icons.music_note_rounded;
-      case ZXFileType.document: return Icons.description_rounded;
-      case ZXFileType.archive: return Icons.folder_zip_rounded;
-      case ZXFileType.other: return Icons.insert_drive_file_rounded;
+      case ZXFileType.image:
+        return Icons.image_rounded;
+      case ZXFileType.video:
+        return Icons.play_circle_rounded;
+      case ZXFileType.audio:
+        return Icons.music_note_rounded;
+      case ZXFileType.document:
+        return Icons.description_rounded;
+      case ZXFileType.archive:
+        return Icons.folder_zip_rounded;
+      case ZXFileType.other:
+        return Icons.insert_drive_file_rounded;
     }
   }
 
   Color _typeColor(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image: return const Color(0xFF00C48C);
-      case ZXFileType.video: return const Color(0xFF4F6FFF);
-      case ZXFileType.audio: return const Color(0xFFFFB800);
-      case ZXFileType.document: return const Color(0xFFDB2777);
-      case ZXFileType.archive: return const Color(0xFF7C3AED);
-      case ZXFileType.other: return AppTheme.textSecondary;
+      case ZXFileType.image:
+        return const Color(0xFF00C48C);
+      case ZXFileType.video:
+        return const Color(0xFF4F6FFF);
+      case ZXFileType.audio:
+        return const Color(0xFFFFB800);
+      case ZXFileType.document:
+        return const Color(0xFFDB2777);
+      case ZXFileType.archive:
+        return const Color(0xFF7C3AED);
+      case ZXFileType.other:
+        return AppTheme.textSecondary;
     }
   }
 
   String _formatSize(int bytes) {
     if (bytes < 1024) return '${bytes}B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
-    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+    if (bytes < 1024 * 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+    }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)}GB';
   }
 }

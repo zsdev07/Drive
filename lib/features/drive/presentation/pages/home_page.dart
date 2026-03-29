@@ -284,15 +284,12 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     for (final file in downloadable) {
       try {
-        final path = await repo.downloadFile(file: file);
+        await repo.downloadFile(file: file);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Downloaded: ${file.name}')),
           );
         }
-      
-      final _ = await repo.downloadFile(file: file);
-        // User opens the file from their device — path not used further
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

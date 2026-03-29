@@ -65,9 +65,26 @@ class FileRepository {
     void Function(int received, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final savePath = '${dir.path}/downloads/${file.name}';
-    await Directory('${dir.path}/downloads').create(recursive: true);
+    // Bot API only allows getFile on files ≤ 20 MB
+    if (file.sizeBytes > 20 * 1024 * 1024) {
+      throw Exception(
+        'File is larger than 20 MB (${(file.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB). '
+        'Bot API download limit is 20 MB. MTProto support coming in V5.',
+      );
+    }
+
+    // Save to external Downloads folder so user can find it
+    Directory saveDir;
+    try {
+      final extDir = await getExternalStorageDirectory();
+      saveDir = Directory('${extDir!.path}/Downloads');
+    } catch (_) {
+      // Fallback to app documents if external not available
+      final appDir = await getApplicationDocumentsDirectory();
+      saveDir = Directory('${appDir.path}/Downloads');
+    }
+    await saveDir.create(recursive: true);
+    final savePath = '${saveDir.path}/${file.name}';
 
     await _telegram.downloadFile(
       fileId: file.telegramFileId,
@@ -76,7 +93,7 @@ class FileRepository {
       cancelToken: cancelToken,
     );
 
-    // Update last accessed
+    // Update last accessed timestamp
     await (_db.update(_db.fileItems)..where((t) => t.uuid.equals(file.uuid)))
         .write(FileItemsCompanion(lastAccessedAt: Value(DateTime.now())));
 
@@ -86,16 +103,11 @@ class FileRepository {
   // ── Delete ────────────────────────────────────────────
 
   Future<void> deleteFile(FileItem file) async {
-    // Soft delete in DB
     await (_db.update(_db.fileItems)..where((t) => t.uuid.equals(file.uuid)))
         .write(const FileItemsCompanion(isDeleted: Value(true)));
-
-    // Delete from Telegram
     try {
       await _telegram.deleteMessage(file.telegramMessageId);
-    } catch (_) {
-      // Ignore Telegram errors — DB soft delete is the source of truth
-    }
+    } catch (_) {}
   }
 
   Future<void> permanentlyDelete(FileItem file) async {
@@ -105,6 +117,35 @@ class FileRepository {
     try {
       await _telegram.deleteMessage(file.telegramMessageId);
     } catch (_) {}
+  }
+
+  // ── Bulk Operations ───────────────────────────────────
+
+  Future<void> bulkDelete(List<String> uuids) async {
+    for (final uuid in uuids) {
+      final results = await (_db.select(_db.fileItems)
+            ..where((t) => t.uuid.equals(uuid)))
+          .get();
+      if (results.isNotEmpty) await deleteFile(results.first);
+    }
+  }
+
+  Future<void> bulkMove(List<String> uuids, String? targetFolderId) async {
+    await (_db.update(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .write(FileItemsCompanion(folderId: Value(targetFolderId)));
+  }
+
+  Future<void> bulkStar(List<String> uuids, {required bool star}) async {
+    await (_db.update(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .write(FileItemsCompanion(isStarred: Value(star)));
+  }
+
+  Future<List<FileItem>> getFilesByUuids(List<String> uuids) async {
+    return (_db.select(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .get();
   }
 
   // ── Queries ───────────────────────────────────────────
@@ -180,6 +221,12 @@ class FolderRepository {
         .watch();
   }
 
+  Future<List<FolderItem>> getAllFolders() async {
+    return (_db.select(_db.folderItems)
+          ..where((t) => t.isDeleted.equals(false)))
+        .get();
+  }
+
   Future<void> createFolder({
     required String name,
     String? parentFolderId,
@@ -198,7 +245,8 @@ class FolderRepository {
   Future<void> renameFolder(FolderItem folder, String newName) async {
     await (_db.update(_db.folderItems)
           ..where((t) => t.uuid.equals(folder.uuid)))
-        .write(FolderItemsCompanion(name: Value(newName), updatedAt: Value(DateTime.now())));
+        .write(FolderItemsCompanion(
+            name: Value(newName), updatedAt: Value(DateTime.now())));
   }
 
   Future<void> deleteFolder(FolderItem folder) async {

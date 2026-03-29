@@ -22,8 +22,8 @@ android {
         applicationId = "zx.offical.drive"
         minSdk = 21
         targetSdk = 35
-        versionCode = flutter.versionCode()
-        versionName = flutter.versionName()
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
     }
 
     buildTypes {

@@ -6,6 +6,7 @@ import 'dart:io';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../domain/models/zx_file.dart';
 import '../providers/drive_providers.dart';
 import '../widgets/storage_card.dart';
 import '../widgets/file_grid.dart';
@@ -289,8 +290,9 @@ class _HomePageState extends ConsumerState<HomePage> {
             SnackBar(content: Text('Downloaded: ${file.name}')),
           );
         }
-        // ignore path — user can open from notification or files app
-        _ = path;
+      
+      final _ = await repo.downloadFile(file: file);
+        // User opens the file from their device — path not used further
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

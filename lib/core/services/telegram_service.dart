@@ -16,6 +16,16 @@ class TelegramUploadResult {
   });
 }
 
+/// Thrown when Telegram returns ok:false — carries the real error description.
+class TelegramApiException implements Exception {
+  final int errorCode;
+  final String description;
+  TelegramApiException(this.errorCode, this.description);
+
+  @override
+  String toString() => 'Telegram [$errorCode]: $description';
+}
+
 class TelegramService {
   late final Dio _dio;
   String? _botToken;
@@ -27,18 +37,42 @@ class TelegramService {
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(minutes: 10),
       sendTimeout: const Duration(minutes: 10),
+      // Don't let Dio throw on non-2xx — we read the body ourselves
+      // so we can surface the real Telegram error message.
+      validateStatus: (_) => true,
     ));
   }
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
-    _botToken = prefs.getString(AppConstants.keyBotToken)
-        ?? dotenv.env['TELEGRAM_BOT_TOKEN'];
-    _channelId = prefs.getString(AppConstants.keyChannelId)
-        ?? dotenv.env['TELEGRAM_CHANNEL_ID'];
+    _botToken = prefs.getString(AppConstants.keyBotToken) ??
+        dotenv.env['TELEGRAM_BOT_TOKEN'];
+    _channelId = prefs.getString(AppConstants.keyChannelId) ??
+        dotenv.env['TELEGRAM_CHANNEL_ID'];
   }
 
   String get _baseUrl => '/bot$_botToken';
+
+  /// Normalise channel id — Telegram requires the -100 prefix.
+  String get _normalizedChannelId {
+    final raw = (_channelId ?? '').trim();
+    if (raw.isEmpty) return raw;
+    if (raw.startsWith('@')) return raw;
+    if (raw.startsWith('-100')) return raw;
+    if (raw.startsWith('-')) return '-100${raw.substring(1)}';
+    return '-100$raw';
+  }
+
+  void _checkResponse(Response response) {
+    final data = response.data;
+    if (data is Map && data['ok'] == true) return;
+
+    final code =
+        (data is Map ? data['error_code'] : response.statusCode) ?? 0;
+    final desc = (data is Map ? data['description'] : null) ??
+        'HTTP ${response.statusCode}';
+    throw TelegramApiException(code as int, desc as String);
+  }
 
   // ── Upload ────────────────────────────────────────────
 
@@ -52,19 +86,21 @@ class TelegramService {
     await init();
 
     final fileSize = await file.length();
-    final endpoint = _resolveEndpoint(mimeType);
 
+    // Always sendDocument — avoids codec validation 400s from
+    // sendPhoto / sendVideo / sendAudio endpoints.
     final formData = FormData.fromMap({
-      'chat_id': _channelId,
-      endpoint: await MultipartFile.fromFile(
+      'chat_id': _normalizedChannelId,
+      'document': await MultipartFile.fromFile(
         file.path,
         filename: fileName,
         contentType: DioMediaType.parse(mimeType),
       ),
+      'caption': 'ZX Drive | $fileName',
     });
 
     final response = await _dio.post(
-      '$_baseUrl/send${_resolveMethod(mimeType)}',
+      '$_baseUrl/sendDocument',
       data: formData,
       cancelToken: cancelToken,
       onSendProgress: (sent, total) {
@@ -72,8 +108,10 @@ class TelegramService {
       },
     );
 
-    final result = response.data['result'];
-    final fileObj = _extractFileObj(result, mimeType);
+    _checkResponse(response);
+
+    final result = response.data['result'] as Map<String, dynamic>;
+    final fileObj = result['document'] as Map<String, dynamic>;
 
     return TelegramUploadResult(
       fileId: fileObj['file_id'] as String,
@@ -84,13 +122,11 @@ class TelegramService {
 
   // ── Chunked / Resumable Upload ────────────────────────
 
-  /// For large files: tracks offset in SharedPrefs so if interrupted,
-  /// it resumes from the last successfully sent chunk.
   Future<TelegramUploadResult> uploadFileResumable({
     required File file,
     required String mimeType,
     required String fileName,
-    required String uploadId, // uuid of the FileItem
+    required String uploadId,
     void Function(int sent, int total)? onProgress,
     CancelToken? cancelToken,
   }) async {
@@ -100,7 +136,7 @@ class TelegramService {
     final prefs = await SharedPreferences.getInstance();
     final resumeKey = 'upload_offset_$uploadId';
 
-    // Files under 50MB go direct (Telegram handles them fine)
+    // Files ≤ 50 MB go direct
     if (fileSize <= 50 * 1024 * 1024) {
       final result = await uploadFile(
         file: file,
@@ -113,10 +149,7 @@ class TelegramService {
       return result;
     }
 
-    // Large files: split into 49MB chunks and send as media group
-    // Telegram bot API max per file is 50MB; we use 49MB to be safe.
-    // Each chunk is uploaded as a document. The first chunk's message ID
-    // is stored as the "parent" for this upload session.
+    // Large files: 49 MB chunks
     const chunkSize = 49 * 1024 * 1024;
     int offset = prefs.getInt(resumeKey) ?? 0;
     int totalSent = offset;
@@ -125,26 +158,24 @@ class TelegramService {
     String? firstMessageId;
 
     final raf = await file.open(mode: FileMode.read);
-
     try {
       while (offset < fileSize) {
         final end = (offset + chunkSize).clamp(0, fileSize);
-        final chunkLength = end - offset;
-
         await raf.setPosition(offset);
-        final chunkBytes = await raf.read(chunkLength);
+        final chunkBytes = await raf.read(end - offset);
 
-        final chunkName = '${fileName}_part${(offset ~/ chunkSize) + 1}';
+        final partNumber = (offset ~/ chunkSize) + 1;
         final formData = FormData.fromMap({
-          'chat_id': _channelId,
+          'chat_id': _normalizedChannelId,
           'document': MultipartFile.fromBytes(
             chunkBytes,
-            filename: chunkName,
-            contentType: DioMediaType.parse('application/octet-stream'),
+            filename: '${fileName}_part$partNumber',
+            contentType:
+                DioMediaType.parse('application/octet-stream'),
           ),
           'caption': offset == 0
-              ? '📦 ZX Drive | $fileName | Part ${(offset ~/ chunkSize) + 1}'
-              : 'Part ${(offset ~/ chunkSize) + 1}',
+              ? 'ZX Drive | $fileName | Part $partNumber'
+              : 'Part $partNumber',
         });
 
         final response = await _dio.post(
@@ -152,20 +183,21 @@ class TelegramService {
           data: formData,
           cancelToken: cancelToken,
           onSendProgress: (sent, total) {
-            if (total > 0) {
-              onProgress?.call(totalSent + sent, fileSize);
-            }
+            if (total > 0) onProgress?.call(totalSent + sent, fileSize);
           },
         );
 
-        final result = response.data['result'];
-        lastFileId = result['document']['file_id'] as String;
+        _checkResponse(response);
+
+        final result =
+            response.data['result'] as Map<String, dynamic>;
+        lastFileId =
+            (result['document'] as Map<String, dynamic>)['file_id']
+                as String;
         firstMessageId ??= result['message_id'].toString();
 
         offset = end;
         totalSent = offset;
-
-        // Persist resume offset
         await prefs.setInt(resumeKey, offset);
       }
     } finally {
@@ -173,7 +205,6 @@ class TelegramService {
     }
 
     await prefs.remove(resumeKey);
-
     return TelegramUploadResult(
       fileId: lastFileId!,
       messageId: firstMessageId!,
@@ -183,14 +214,16 @@ class TelegramService {
 
   // ── Download ──────────────────────────────────────────
 
+  /// Bot API getFile only works for files ≤ 20 MB.
   Future<String> getDownloadUrl(String fileId) async {
     await init();
-
-    final response = await _dio.get('$_baseUrl/getFile', queryParameters: {
-      'file_id': fileId,
-    });
-
-    final filePath = response.data['result']['file_path'] as String;
+    final response = await _dio.get(
+      '$_baseUrl/getFile',
+      queryParameters: {'file_id': fileId},
+    );
+    _checkResponse(response);
+    final filePath =
+        response.data['result']['file_path'] as String;
     return 'https://api.telegram.org/file/bot$_botToken/$filePath';
   }
 
@@ -201,7 +234,10 @@ class TelegramService {
     CancelToken? cancelToken,
   }) async {
     final url = await getDownloadUrl(fileId);
-    await _dio.download(
+
+    // Use a separate Dio instance for file download (no validateStatus override needed)
+    final downloadDio = Dio();
+    await downloadDio.download(
       url,
       savePath,
       cancelToken: cancelToken,
@@ -215,10 +251,14 @@ class TelegramService {
 
   Future<void> deleteMessage(String messageId) async {
     await init();
-    await _dio.post('$_baseUrl/deleteMessage', data: {
-      'chat_id': _channelId,
-      'message_id': int.parse(messageId),
-    });
+    final response = await _dio.post(
+      '$_baseUrl/deleteMessage',
+      data: {
+        'chat_id': _normalizedChannelId,
+        'message_id': int.parse(messageId),
+      },
+    );
+    _checkResponse(response);
   }
 
   // ── Validate credentials ──────────────────────────────
@@ -228,7 +268,8 @@ class TelegramService {
     required String channelId,
   }) async {
     try {
-      final testDio = Dio();
+      final testDio =
+          Dio(BaseOptions(validateStatus: (_) => true));
       final response = await testDio.get(
         '${AppConstants.telegramBaseUrl}/bot$botToken/getMe',
       );
@@ -236,32 +277,5 @@ class TelegramService {
     } catch (_) {
       return false;
     }
-  }
-
-  // ── Helpers ───────────────────────────────────────────
-
-  String _resolveEndpoint(String mimeType) {
-    if (mimeType.startsWith('image/')) return 'photo';
-    if (mimeType.startsWith('video/')) return 'video';
-    if (mimeType.startsWith('audio/')) return 'audio';
-    return 'document';
-  }
-
-  String _resolveMethod(String mimeType) {
-    if (mimeType.startsWith('image/')) return 'Photo';
-    if (mimeType.startsWith('video/')) return 'Video';
-    if (mimeType.startsWith('audio/')) return 'Audio';
-    return 'Document';
-  }
-
-  Map<String, dynamic> _extractFileObj(
-      Map<String, dynamic> result, String mimeType) {
-    if (mimeType.startsWith('image/')) {
-      final photos = result['photo'] as List;
-      return photos.last as Map<String, dynamic>;
-    }
-    if (mimeType.startsWith('video/')) return result['video'];
-    if (mimeType.startsWith('audio/')) return result['audio'];
-    return result['document'];
   }
 }

@@ -1,5 +1,5 @@
 import 'package:drift/drift.dart';
-import '../../../core/database/app_database.dart';
+import '../../../../core/database/app_database.dart';
 
 enum ZXFileType { image, video, audio, document, archive, other }
 

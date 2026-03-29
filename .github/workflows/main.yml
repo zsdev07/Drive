@@ -1,8 +1,6 @@
 name: ZX Project Build
 
 on: 
-  push:
-    branches: [ main ]
   workflow_dispatch: # Allows you to run it manually from the Actions tab
 
 jobs:
@@ -26,10 +24,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-
-      # 4. Extract your project zip
-      - name: Extract Project
-        run: unzip zx.zip -d .
 
       # 5. Run your specific commands
       - name: Install Dependencies

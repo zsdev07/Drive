@@ -68,23 +68,25 @@ class FileRepository {
     // Bot API only allows getFile on files ≤ 20 MB
     if (file.sizeBytes > 20 * 1024 * 1024) {
       throw Exception(
-        'File is larger than 20 MB (${(file.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB). '
-        'Bot API download limit is 20 MB. MTProto support coming in V5.',
+        'File is ${(file.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB — '
+        'Bot API download limit is 20 MB. MTProto support coming soon.',
       );
     }
 
-    // Save to external Downloads folder so user can find it
-    Directory saveDir;
-    try {
-      final extDir = await getExternalStorageDirectory();
-      saveDir = Directory('${extDir!.path}/Downloads');
-    } catch (_) {
-      // Fallback to app documents if external not available
-      final appDir = await getApplicationDocumentsDirectory();
-      saveDir = Directory('${appDir.path}/Downloads');
-    }
+    // getApplicationDocumentsDirectory() is always accessible without
+    // any runtime permissions on Android and iOS — no WRITE_EXTERNAL_STORAGE needed.
+    final appDir = await getApplicationDocumentsDirectory();
+    final saveDir = Directory('${appDir.path}/ZX Drive Downloads');
     await saveDir.create(recursive: true);
-    final savePath = '${saveDir.path}/${file.name}';
+
+    // Avoid silently overwriting an existing file with the same name
+    String savePath = '${saveDir.path}/${file.name}';
+    if (File(savePath).existsSync()) {
+      final dotIndex = file.name.lastIndexOf('.');
+      final ext = dotIndex != -1 ? file.name.substring(dotIndex) : '';
+      final base = dotIndex != -1 ? file.name.substring(0, dotIndex) : file.name;
+      savePath = '${saveDir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
+    }
 
     await _telegram.downloadFile(
       fileId: file.telegramFileId,
@@ -100,16 +102,23 @@ class FileRepository {
     return savePath;
   }
 
-  // ── Delete ────────────────────────────────────────────
+  // ── Delete / Restore ──────────────────────────────────
 
+  /// Soft-delete: moves to trash in DB only.
+  /// Does NOT touch Telegram so the file can be restored later.
   Future<void> deleteFile(FileItem file) async {
     await (_db.update(_db.fileItems)..where((t) => t.uuid.equals(file.uuid)))
         .write(const FileItemsCompanion(isDeleted: Value(true)));
-    try {
-      await _telegram.deleteMessage(file.telegramMessageId);
-    } catch (_) {}
   }
 
+  /// Restores a trashed file back to its original location.
+  Future<void> restoreFile(FileItem file) async {
+    await (_db.update(_db.fileItems)..where((t) => t.uuid.equals(file.uuid)))
+        .write(const FileItemsCompanion(isDeleted: Value(false)));
+  }
+
+  /// Permanent delete: removes from DB AND deletes from Telegram channel.
+  /// Only called from the Trash screen — never from the main drive.
   Future<void> permanentlyDelete(FileItem file) async {
     await (_db.delete(_db.fileItems)
           ..where((t) => t.uuid.equals(file.uuid)))
@@ -122,11 +131,27 @@ class FileRepository {
   // ── Bulk Operations ───────────────────────────────────
 
   Future<void> bulkDelete(List<String> uuids) async {
-    for (final uuid in uuids) {
-      final results = await (_db.select(_db.fileItems)
-            ..where((t) => t.uuid.equals(uuid)))
-          .get();
-      if (results.isNotEmpty) await deleteFile(results.first);
+    // Soft-delete only — no Telegram calls
+    await (_db.update(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .write(const FileItemsCompanion(isDeleted: Value(true)));
+  }
+
+  Future<void> bulkRestore(List<String> uuids) async {
+    await (_db.update(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .write(const FileItemsCompanion(isDeleted: Value(false)));
+  }
+
+  Future<void> bulkPermanentDelete(List<String> uuids) async {
+    final files = await getFilesByUuids(uuids);
+    await (_db.delete(_db.fileItems)
+          ..where((t) => t.uuid.isIn(uuids)))
+        .go();
+    for (final file in files) {
+      try {
+        await _telegram.deleteMessage(file.telegramMessageId);
+      } catch (_) {}
     }
   }
 

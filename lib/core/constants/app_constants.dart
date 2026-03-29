@@ -10,5 +10,7 @@ class AppConstants {
   static const String keyUserPin = 'user_pin';
   static const String keyBotToken = 'bot_token';
   static const String keyChannelId = 'channel_id';
-  static const int maxUploadBytes = 2 * 1024 * 1024 * 1024;
+  static const int maxUploadBytes = 2 * 1024 * 1024 * 1024; // 2 GB
+  static const int maxConcurrentUploads = 10;
+  static const int botApiMaxDownloadBytes = 20 * 1024 * 1024; // 20 MB Bot API limit
 }

@@ -5,18 +5,11 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/mtproto_service.dart';
 import '../providers/drive_providers.dart';
 
-/// Two-mode OTP page:
-///   - [_Mode.code]     → 5-digit Telegram code
-///   - [_Mode.password] → 2FA cloud password (shown when [MtprotoTwoFactorRequired] is thrown)
 enum _Mode { code, password }
 
 class MtprotoOtpPage extends ConsumerStatefulWidget {
   final String phone;
-
-  const MtprotoOtpPage({
-    super.key,
-    required this.phone,
-  });
+  const MtprotoOtpPage({super.key, required this.phone});
 
   @override
   ConsumerState<MtprotoOtpPage> createState() => _MtprotoOtpPageState();
@@ -53,10 +46,8 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
       return;
     }
     _setLoading(true);
-
-    final mtproto = ref.read(mtprotoServiceProvider);
-
     try {
+      final mtproto = await ref.read(mtprotoServiceProvider.future);
       await mtproto.signIn(widget.phone, _otp);
       _onAuthSuccess();
     } on MtprotoTwoFactorRequired catch (e) {
@@ -83,10 +74,8 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
       return;
     }
     _setLoading(true);
-
-    final mtproto = ref.read(mtprotoServiceProvider);
-
     try {
+      final mtproto = await ref.read(mtprotoServiceProvider.future);
       await mtproto.signInWithPassword(password);
       _onAuthSuccess();
     } on MtprotoAuthException catch (e) {
@@ -108,24 +97,17 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
     });
   }
 
-  void _setLoading(bool v) {
-    if (mounted) setState(() => _isLoading = v);
-  }
+  void _setLoading(bool v) { if (mounted) setState(() => _isLoading = v); }
 
   String _initialsFrom(String name) {
     final parts = name.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
+    if (parts.length >= 2) return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
     return name.isNotEmpty ? name[0].toUpperCase() : '?';
   }
 
   void _onDigitChanged(String value, int index) {
-    if (value.length == 1 && index < 4) {
-      _focusNodes[index + 1].requestFocus();
-    } else if (value.isEmpty && index > 0) {
-      _focusNodes[index - 1].requestFocus();
-    }
+    if (value.length == 1 && index < 4) _focusNodes[index + 1].requestFocus();
+    else if (value.isEmpty && index > 0) _focusNodes[index - 1].requestFocus();
     setState(() => _error = null);
   }
 
@@ -145,8 +127,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
-          child:
-              _mode == _Mode.code ? _buildCodeMode() : _buildPasswordMode(),
+          child: _mode == _Mode.code ? _buildCodeMode() : _buildPasswordMode(),
         ),
       ),
     );
@@ -157,18 +138,16 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 16),
-        _modeIcon(Icons.message_rounded, AppTheme.primary.withOpacity(0.12),
-            AppTheme.primary),
+        _modeIcon(Icons.message_rounded,
+            AppTheme.primary.withOpacity(0.12), AppTheme.primary),
         const SizedBox(height: 24),
-        const Text(
-          'Enter the Code',
-          style: TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-          ),
-        ),
+        const Text('Enter the Code',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+            )),
         const SizedBox(height: 10),
         RichText(
           text: TextSpan(
@@ -179,8 +158,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
               TextSpan(
                 text: widget.phone,
                 style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontWeight: FontWeight.w600),
+                    color: AppTheme.textPrimary, fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -190,8 +168,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: List.generate(5, (i) {
             return SizedBox(
-              width: 54,
-              height: 60,
+              width: 54, height: 60,
               child: TextFormField(
                 controller: _digitCtrlrs[i],
                 focusNode: _focusNodes[i],
@@ -245,18 +222,16 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 16),
-        _modeIcon(Icons.lock_rounded, AppTheme.warning.withOpacity(0.12),
-            AppTheme.warning),
+        _modeIcon(Icons.lock_rounded,
+            AppTheme.warning.withOpacity(0.12), AppTheme.warning),
         const SizedBox(height: 24),
-        const Text(
-          'Two-Factor Auth',
-          style: TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 28,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.5,
-          ),
-        ),
+        const Text('Two-Factor Auth',
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+            )),
         const SizedBox(height: 10),
         Text(
           _twoFaHint != null
@@ -280,8 +255,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
                 _showPassword
                     ? Icons.visibility_off_rounded
                     : Icons.visibility_rounded,
-                color: AppTheme.textSecondary,
-                size: 20,
+                color: AppTheme.textSecondary, size: 20,
               ),
               onPressed: () =>
                   setState(() => _showPassword = !_showPassword),
@@ -294,8 +268,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
         const SizedBox(height: 24),
         Center(
           child: TextButton(
-            onPressed: () =>
-                setState(() => _mode = _Mode.code),
+            onPressed: () => setState(() => _mode = _Mode.code),
             child: const Text('Back to code',
                 style: TextStyle(
                     color: AppTheme.textSecondary, fontSize: 13)),
@@ -307,8 +280,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
 
   Widget _modeIcon(IconData icon, Color bg, Color fg) {
     return Container(
-      width: 56,
-      height: 56,
+      width: 56, height: 56,
       decoration: BoxDecoration(
           color: bg, borderRadius: BorderRadius.circular(16)),
       child: Icon(icon, color: fg, size: 28),
@@ -326,8 +298,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
           const SizedBox(width: 6),
           Expanded(
             child: Text(_error!,
-                style:
-                    const TextStyle(color: AppTheme.error, fontSize: 12)),
+                style: const TextStyle(color: AppTheme.error, fontSize: 12)),
           ),
         ],
       ),
@@ -341,8 +312,7 @@ class _MtprotoOtpPageState extends ConsumerState<MtprotoOtpPage> {
         onPressed: _isLoading ? null : onPressed,
         child: _isLoading
             ? const SizedBox(
-                height: 20,
-                width: 20,
+                height: 20, width: 20,
                 child: CircularProgressIndicator(
                     color: Colors.white, strokeWidth: 2))
             : Text(label),

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_file/open_file.dart';
@@ -139,109 +140,77 @@ class FileCard extends ConsumerWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      // Use a builder so the sheet gets its own subtree for ScaffoldMessenger
-      builder: (sheetCtx) => _FileOptionsSheet(
-        file: file,
-        repo: repo,
-      ),
+      builder: (_) => _FileOptionsSheet(file: file, repo: repo),
     );
   }
 
   IconData _typeIcon(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image:
-        return Icons.image_rounded;
-      case ZXFileType.video:
-        return Icons.play_circle_rounded;
-      case ZXFileType.audio:
-        return Icons.music_note_rounded;
-      case ZXFileType.document:
-        return Icons.description_rounded;
-      case ZXFileType.archive:
-        return Icons.folder_zip_rounded;
-      case ZXFileType.other:
-        return Icons.insert_drive_file_rounded;
+      case ZXFileType.image: return Icons.image_rounded;
+      case ZXFileType.video: return Icons.play_circle_rounded;
+      case ZXFileType.audio: return Icons.music_note_rounded;
+      case ZXFileType.document: return Icons.description_rounded;
+      case ZXFileType.archive: return Icons.folder_zip_rounded;
+      case ZXFileType.other: return Icons.insert_drive_file_rounded;
     }
   }
 
   Color _typeColor(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image:
-        return const Color(0xFF00C48C);
-      case ZXFileType.video:
-        return const Color(0xFF4F6FFF);
-      case ZXFileType.audio:
-        return const Color(0xFFFFB800);
-      case ZXFileType.document:
-        return const Color(0xFFDB2777);
-      case ZXFileType.archive:
-        return const Color(0xFF7C3AED);
-      case ZXFileType.other:
-        return AppTheme.textSecondary;
+      case ZXFileType.image: return const Color(0xFF00C48C);
+      case ZXFileType.video: return const Color(0xFF4F6FFF);
+      case ZXFileType.audio: return const Color(0xFFFFB800);
+      case ZXFileType.document: return const Color(0xFFDB2777);
+      case ZXFileType.archive: return const Color(0xFF7C3AED);
+      case ZXFileType.other: return AppTheme.textSecondary;
     }
   }
 
   String _formatSize(int bytes) {
     if (bytes < 1024) return '${bytes}B';
-    if (bytes < 1024 * 1024) {
-      return '${(bytes / 1024).toStringAsFixed(1)}KB';
-    }
-    if (bytes < 1024 * 1024 * 1024) {
-      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
-    }
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)}GB';
   }
 }
 
 // ── File Options Sheet ────────────────────────────────────
-// Extracted as its own StatefulWidget so it can:
-//   1. Watch a live stream of the file to always have fresh isStarred state
-//   2. Use its own BuildContext that stays valid after Navigator.pop()
+// Extracted as StatefulWidget so it has its own context (valid after pop)
+// and owns local star state that toggles instantly on tap.
 
-class _FileOptionsSheet extends ConsumerStatefulWidget {
+class _FileOptionsSheet extends StatefulWidget {
   final FileItem file;
   final FileRepository repo;
-
   const _FileOptionsSheet({required this.file, required this.repo});
 
   @override
-  ConsumerState<_FileOptionsSheet> createState() => _FileOptionsSheetState();
+  State<_FileOptionsSheet> createState() => _FileOptionsSheetState();
 }
 
-class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
+class _FileOptionsSheetState extends State<_FileOptionsSheet> {
   bool _downloading = false;
 
-  // Keep a live copy of the file so star state is always fresh
-  late FileItem _file;
+  // Local star state: seeded from file, toggled immediately on tap.
+  // Works correctly whether the sheet is opened from Home, Starred, or Search —
+  // because we never re-query a stream that might not contain this file.
+  late bool _isStarred;
 
   @override
   void initState() {
     super.initState();
-    _file = widget.file;
+    _isStarred = widget.file.isStarred;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Watch the files stream so isStarred updates live inside the sheet
-    final filesAsync = ref.watch(filesProvider(widget.file.folderId));
-    filesAsync.whenData((files) {
-      final updated =
-          files.where((f) => f.uuid == widget.file.uuid).firstOrNull;
-      if (updated != null && updated.isStarred != _file.isStarred) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() => _file = updated);
-        });
-      }
-    });
-
-    final fileType = ZXFileTypeX.fromMime(_file.mimeType);
+    final fileType = ZXFileTypeX.fromMime(widget.file.mimeType);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Handle
+          // Handle bar
           Container(
             width: 40,
             height: 4,
@@ -251,7 +220,7 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
             ),
           ),
           const SizedBox(height: 8),
-          // File header
+          // File name header
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(
@@ -259,19 +228,22 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
                 Icon(_typeIcon(fileType), color: _typeColor(fileType), size: 20),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(_file.name,
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
+                  child: Text(
+                    widget.file.name,
+                    style: const TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
           ),
           const Divider(color: AppTheme.bgSurface),
-          // Download
+
+          // ── Download ──────────────────────────────────
           ListTile(
             leading: _downloading
                 ? const SizedBox(
@@ -285,31 +257,36 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
               _downloading ? 'Downloading...' : 'Download',
               style: const TextStyle(color: AppTheme.textPrimary),
             ),
-            subtitle: _file.sizeBytes > 20 * 1024 * 1024
+            subtitle: widget.file.sizeBytes > 20 * 1024 * 1024
                 ? const Text('File > 20 MB — Bot API limit',
                     style: TextStyle(color: AppTheme.warning, fontSize: 11))
                 : null,
             onTap: _downloading ? null : _downloadFile,
           ),
-          // Star / Unstar — always reads from fresh _file
+
+          // ── Star / Unstar ─────────────────────────────
+          // _isStarred is local state — flips instantly on tap.
+          // This works from ANY page (Home, Starred, Search) because
+          // we don't depend on a stream that may not contain this file.
           ListTile(
             leading: Icon(
-              _file.isStarred
-                  ? Icons.star_rounded
-                  : Icons.star_border_rounded,
+              _isStarred ? Icons.star_rounded : Icons.star_border_rounded,
               color: AppTheme.warning,
             ),
             title: Text(
-              _file.isStarred ? 'Unstar' : 'Star',
+              _isStarred ? 'Unstar' : 'Star',
               style: const TextStyle(color: AppTheme.textPrimary),
             ),
             onTap: () async {
-              await widget.repo.toggleStar(_file);
-              // Close sheet — the grid will rebuild with fresh data from the stream
+              // Flip local state immediately so UI responds at once
+              setState(() => _isStarred = !_isStarred);
+              await widget.repo.toggleStar(widget.file);
+              // Close sheet — Riverpod stream will update the grid behind it
               if (mounted) Navigator.pop(context);
             },
           ),
-          // Rename
+
+          // ── Rename ────────────────────────────────────
           ListTile(
             leading: const Icon(Icons.edit_rounded, color: AppTheme.accent),
             title: const Text('Rename',
@@ -319,13 +296,14 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
               _showRenameDialog();
             },
           ),
-          // Delete (soft — goes to trash)
+
+          // ── Move to Trash ─────────────────────────────
           ListTile(
             leading: const Icon(Icons.delete_rounded, color: AppTheme.error),
             title: const Text('Move to Trash',
                 style: TextStyle(color: AppTheme.error)),
             onTap: () {
-              widget.repo.deleteFile(_file);
+              widget.repo.deleteFile(widget.file);
               Navigator.pop(context);
             },
           ),
@@ -336,16 +314,16 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
 
   Future<void> _downloadFile() async {
     setState(() => _downloading = true);
-    // Capture scaffold messenger BEFORE any async gap
+    // Capture BEFORE any async gap — context may be gone after await
     final messenger = ScaffoldMessenger.of(context);
 
     try {
-      final savePath = await widget.repo.downloadFile(file: _file);
+      final savePath = await widget.repo.downloadFile(file: widget.file);
 
       messenger.clearSnackBars();
       messenger.showSnackBar(
         SnackBar(
-          content: Text('Saved: ${savePath.split('/').last}'),
+          content: Text('Saved to Downloads: ${widget.file.name}'),
           action: SnackBarAction(
             label: 'OPEN',
             onPressed: () => OpenFile.open(savePath),
@@ -368,17 +346,15 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
   }
 
   void _showRenameDialog() {
-    final controller = TextEditingController(text: _file.name);
+    final controller = TextEditingController(text: widget.file.name);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppTheme.bgCard,
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Rename File',
             style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontWeight: FontWeight.w700)),
+                color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -394,7 +370,7 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
           ElevatedButton(
             onPressed: () {
               if (controller.text.trim().isNotEmpty) {
-                widget.repo.renameFile(_file, controller.text.trim());
+                widget.repo.renameFile(widget.file, controller.text.trim());
                 Navigator.pop(ctx);
               }
             },
@@ -407,35 +383,23 @@ class _FileOptionsSheetState extends ConsumerState<_FileOptionsSheet> {
 
   IconData _typeIcon(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image:
-        return Icons.image_rounded;
-      case ZXFileType.video:
-        return Icons.play_circle_rounded;
-      case ZXFileType.audio:
-        return Icons.music_note_rounded;
-      case ZXFileType.document:
-        return Icons.description_rounded;
-      case ZXFileType.archive:
-        return Icons.folder_zip_rounded;
-      case ZXFileType.other:
-        return Icons.insert_drive_file_rounded;
+      case ZXFileType.image: return Icons.image_rounded;
+      case ZXFileType.video: return Icons.play_circle_rounded;
+      case ZXFileType.audio: return Icons.music_note_rounded;
+      case ZXFileType.document: return Icons.description_rounded;
+      case ZXFileType.archive: return Icons.folder_zip_rounded;
+      case ZXFileType.other: return Icons.insert_drive_file_rounded;
     }
   }
 
   Color _typeColor(ZXFileType type) {
     switch (type) {
-      case ZXFileType.image:
-        return const Color(0xFF00C48C);
-      case ZXFileType.video:
-        return const Color(0xFF4F6FFF);
-      case ZXFileType.audio:
-        return const Color(0xFFFFB800);
-      case ZXFileType.document:
-        return const Color(0xFFDB2777);
-      case ZXFileType.archive:
-        return const Color(0xFF7C3AED);
-      case ZXFileType.other:
-        return AppTheme.textSecondary;
+      case ZXFileType.image: return const Color(0xFF00C48C);
+      case ZXFileType.video: return const Color(0xFF4F6FFF);
+      case ZXFileType.audio: return const Color(0xFFFFB800);
+      case ZXFileType.document: return const Color(0xFFDB2777);
+      case ZXFileType.archive: return const Color(0xFF7C3AED);
+      case ZXFileType.other: return AppTheme.textSecondary;
     }
   }
 }

@@ -38,6 +38,10 @@ dependencies:
   percent_indicator: ^4.2.3
   iconsax: ^0.0.8
 
+  # MTProto / TDLib
+  tdlib: ^1.0.3                        # TDLib tdjson FFI bindings (Android .so bundled)
+  flutter_secure_storage: ^9.2.2       # Encrypted session storage (replaces SharedPrefs for auth keys)
+
   # Utils
   uuid: ^4.4.0
   intl: ^0.19.0

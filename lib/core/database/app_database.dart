@@ -58,14 +58,71 @@ class UserItems extends Table {
   Set<Column> get primaryKey => {uid};
 }
 
+/// Stores MTProto session metadata.
+/// Secrets (auth key, server salt) live in flutter_secure_storage —
+/// only non-sensitive identifiers live here.
+/// Designed for N accounts even though v1 only activates one at a time.
+class MtprotoSessions extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get phone => text()();
+  TextColumn get dcId => text()();
+  BoolColumn get isActive => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get createdAt => dateTime()();
+}
+
 // ── Database ──────────────────────────────────────────────
 
-@DriftDatabase(tables: [FileItems, FolderItems, UserItems])
+@DriftDatabase(tables: [FileItems, FolderItems, UserItems, MtprotoSessions])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+        },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            // v1 → v2: add MtprotoSessions table
+            await m.createTable(mtprotoSessions);
+          }
+        },
+      );
+
+  // ── MtprotoSessions helpers ───────────────────────────
+
+  Future<MtprotoSession?> getActiveSession() {
+    return (select(mtprotoSessions)
+          ..where((t) => t.isActive.equals(true))
+          ..limit(1))
+        .getSingleOrNull();
+  }
+
+  Future<int> upsertSession({
+    required String phone,
+    required String dcId,
+  }) async {
+    // Deactivate any existing active session first
+    await (update(mtprotoSessions)
+          ..where((t) => t.isActive.equals(true)))
+        .write(const MtprotoSessionsCompanion(isActive: Value(false)));
+
+    return into(mtprotoSessions).insert(
+      MtprotoSessionsCompanion.insert(
+        phone: phone,
+        dcId: dcId,
+        isActive: const Value(true),
+        createdAt: DateTime.now(),
+      ),
+    );
+  }
+
+  Future<void> clearAllSessions() async {
+    await delete(mtprotoSessions).go();
+  }
 }
 
 LazyDatabase _openConnection() {

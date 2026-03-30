@@ -15,7 +15,7 @@ import '../../domain/models/zx_file.dart';
 class FileRepository {
   final AppDatabase _db;
   final TelegramService _telegram;
-  final MtprotoService _mtproto;
+  final MtprotoService? _mtproto;
 
   FileRepository(this._db, this._telegram, this._mtproto);
 
@@ -40,9 +40,9 @@ class FileRepository {
 
     late final TelegramUploadResult result;
 
-    if (await _isMtprotoActive() && _mtproto.isAuthenticated) {
+    if (await _isMtprotoActive() && (_mtproto?.isAuthenticated ?? false)) {
       // MTProto path — no 50 MB limit, parallel 512 KB chunks
-      final mtResult = await _mtproto.uploadFile(
+      final mtResult = await _mtproto!.uploadFile(
         file: file,
         mimeType: mimeType,
         fileName: fileName,
@@ -120,9 +120,9 @@ class FileRepository {
           '${saveDir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext';
     }
 
-    if (await _isMtprotoActive() && _mtproto.isAuthenticated) {
+    if (await _isMtprotoActive() && (_mtproto?.isAuthenticated ?? false)) {
       // MTProto path — no 20 MB limit
-      await _mtproto.downloadFile(
+      await _mtproto!.downloadFile(
         fileId: file.telegramFileId,
         savePath: savePath,
         onProgress: onProgress,

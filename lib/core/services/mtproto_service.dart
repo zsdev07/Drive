@@ -401,7 +401,8 @@ class MtprotoService {
         deviceModel: Platform.operatingSystem,
         systemVersion: '',
         applicationVersion: AppConstants.appVersion,
-        enableStorageOptimizer: false, // FIX 5: required named param
+        enableStorageOptimizer: false,
+        ignoreFileNames: false, // FIX 5: required named param
       ));
     } else if (state is td.AuthorizationStateWaitPhoneNumber) {
       // Ready — sendCode() drives the next step

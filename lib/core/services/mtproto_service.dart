@@ -231,7 +231,7 @@ class MtprotoService {
       //    accepts the plaintext password wrapped in InputCheckPasswordSRP.
       //    Full SRP implementation is out of scope here; surface the limitation.
       //    Throw a meaningful error so the UI can guide the user.
-      _ = info; // suppress unused warning
+      final _ = info; // Explicitly declare it as a local variable
       throw MtprotoAuthException(
         'Two-factor authentication via pure HTTP requires SRP (Secure Remote '
         'Password) which needs a full MTProto crypto implementation. '

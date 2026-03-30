@@ -11,20 +11,7 @@ import 'package:tdlib/tdlib.dart';
 
 import '../constants/app_constants.dart';
 import '../database/app_database.dart';
-
-// ── Result types ──────────────────────────────────────────
-
-class TelegramUploadResult {
-  final String fileId;
-  final String messageId;
-  final int fileSize;
-
-  TelegramUploadResult({
-    required this.fileId,
-    required this.messageId,
-    required this.fileSize,
-  });
-}
+import 'telegram_service.dart'; // shared TelegramUploadResult lives here
 
 // ── Exceptions ────────────────────────────────────────────
 
@@ -446,8 +433,6 @@ class MtprotoService {
   void _onAuthState(td.AuthorizationState state) {
     if (state is td.AuthorizationStateWaitTdlibParameters) {
       _send(td.SetTdlibParameters(parameters: _tdlibParams!));
-    } else if (state is td.AuthorizationStateWaitEncryptionKey) {
-      _send(td.CheckDatabaseEncryptionKey(encryptionKey: ''));
     } else if (state is td.AuthorizationStateWaitPhoneNumber) {
       // Ready to receive phone number — nothing to do here, sendCode() drives it
     } else if (state is td.AuthorizationStateWaitCode) {

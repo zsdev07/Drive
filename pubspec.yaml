@@ -39,7 +39,7 @@ dependencies:
   iconsax: ^0.0.8
 
   # MTProto / TDLib
-  tdlib: ^1.0.3                        # TDLib tdjson FFI bindings (Android .so bundled)
+  tdlib: 1.6.0                         # TDLib tdjson FFI bindings — pinned, API changed at 1.6.0
   flutter_secure_storage: ^9.2.2       # Encrypted session storage (replaces SharedPrefs for auth keys)
 
   # Utils

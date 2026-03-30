@@ -6,12 +6,6 @@ import '../../../../core/theme/app_theme.dart';
 import 'mtproto_auth_page.dart';
 import 'mtproto_profile_page.dart';
 
-// SharedPrefs keys for MTProto session
-const String _keyMtprotoConnected = 'mtproto_connected';
-const String _keyMtprotoName = 'mtproto_name';
-const String _keyMtprotoPhone = 'mtproto_phone';
-const String _keyMtprotoAvatar = 'mtproto_avatar_initials';
-
 class AccountPage extends StatefulWidget {
   const AccountPage({super.key});
 
@@ -40,13 +34,13 @@ class _AccountPageState extends State<AccountPage>
 
   Future<void> _loadState() async {
     final prefs = await SharedPreferences.getInstance();
-    final connected = prefs.getBool(_keyMtprotoConnected) ?? false;
+    final connected = prefs.getBool(AppConstants.keyMtprotoConnected) ?? false;
     if (connected) {
       setState(() {
         _isConnected = true;
-        _name = prefs.getString(_keyMtprotoName) ?? '';
-        _phone = prefs.getString(_keyMtprotoPhone) ?? '';
-        _initials = prefs.getString(_keyMtprotoAvatar) ?? '';
+        _name = prefs.getString(AppConstants.keyMtprotoName) ?? '';
+        _phone = prefs.getString(AppConstants.keyMtprotoPhone) ?? '';
+        _initials = prefs.getString(AppConstants.keyMtprotoAvatar) ?? '';
       });
     }
   }
@@ -66,10 +60,10 @@ class _AccountPageState extends State<AccountPage>
             initials: _initials,
             onDisconnect: () async {
               final prefs = await SharedPreferences.getInstance();
-              await prefs.remove(_keyMtprotoConnected);
-              await prefs.remove(_keyMtprotoName);
-              await prefs.remove(_keyMtprotoPhone);
-              await prefs.remove(_keyMtprotoAvatar);
+              await prefs.remove(AppConstants.keyMtprotoConnected);
+              await prefs.remove(AppConstants.keyMtprotoName);
+              await prefs.remove(AppConstants.keyMtprotoPhone);
+              await prefs.remove(AppConstants.keyMtprotoAvatar);
               if (mounted) setState(() => _isConnected = false);
             },
           )
@@ -352,10 +346,10 @@ class _AccountPageState extends State<AccountPage>
                 final phone = result['phone'] ?? '';
                 final initials = result['initials'] ?? '';
                 final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool(_keyMtprotoConnected, true);
-                await prefs.setString(_keyMtprotoName, name);
-                await prefs.setString(_keyMtprotoPhone, phone);
-                await prefs.setString(_keyMtprotoAvatar, initials);
+                await prefs.setBool(AppConstants.keyMtprotoConnected, true);
+                await prefs.setString(AppConstants.keyMtprotoName, name);
+                await prefs.setString(AppConstants.keyMtprotoPhone, phone);
+                await prefs.setString(AppConstants.keyMtprotoAvatar, initials);
                 setState(() {
                   _isConnected = true;
                   _name = name;

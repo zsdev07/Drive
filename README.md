@@ -1,5 +1,5 @@
 # ZX Drive
-[![Ask DeepWiki](https://devin.ai/assets/askdeepwiki.png)](https://deepwiki.com/zsdev07/Drive.git)
+[![Ask DeepWiki](https://devin.ai/assets/telegram.png)](https://deepwiki.com/zsdev07/Drive.git)
 
 ZX Drive is a cross-platform cloud storage application built with Flutter that uniquely leverages the Telegram API to provide 5TB of free, private, and secure storage.
 

@@ -23,13 +23,13 @@ class FileCard extends ConsumerWidget {
       onTap: () {
         if (isSelectionMode) {
           ref.read(selectionProvider.notifier).toggle(file.uuid);
+        } else {
+          _showOptions(context, ref);
         }
       },
       onLongPress: () {
         if (!isSelectionMode) {
           ref.read(selectionProvider.notifier).toggle(file.uuid);
-        } else {
-          _showOptions(context, ref);
         }
       },
       child: AnimatedContainer(

@@ -315,7 +315,7 @@ class _AccountPageState extends State<AccountPage>
       _CompRow('Download limit', '20 MB', 'Unlimited', true),
       _CompRow('Upload speed', 'Standard', '10× faster', true),
       _CompRow('File types', 'Restricted', 'All types', true),
-      _CompRow('Concurrent uploads', '10 files', '10 files', false),
+      _CompRow('Concurrent uploads', '10 files', '30 files', true),
       _CompRow('Resume transfers', 'Partial', 'Full support', true),
       _CompRow('Cost', 'Free', 'Free', false),
     ];

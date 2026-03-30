@@ -23,7 +23,7 @@ dependencies:
   # Navigation
   go_router: ^13.2.0
 
-  # Telegram API
+  # Telegram API (HTTP — Bot API + MTProto auth via dio)
   dio: ^5.4.3+1
 
   # File Handling
@@ -38,9 +38,8 @@ dependencies:
   percent_indicator: ^4.2.3
   iconsax: ^0.0.8
 
-  # MTProto / TDLib
-  tdlib: 1.6.0                         # TDLib tdjson FFI bindings — pinned, API changed at 1.6.0
-  flutter_secure_storage: ^9.2.2       # Encrypted session storage (replaces SharedPrefs for auth keys)
+  # Secure storage for API ID / Hash / session keys
+  flutter_secure_storage: ^9.2.2
 
   # Utils
   uuid: ^4.4.0
@@ -59,5 +58,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets: 
+  assets:
     - .env

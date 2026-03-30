@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
@@ -100,14 +101,27 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
   int get _activeCount =>
       state.where((t) => t.status == UploadStatus.uploading).length;
 
+  /// Returns the concurrent-upload ceiling for the current session.
+  /// Once MTProto (account auth) is wired up, this will read the session flag.
+  /// For now it reads SharedPreferences synchronously via a cached value set
+  /// at notifier creation — we keep it simple until TDLib lands.
+  Future<int> _concurrentLimit() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isMtproto = prefs.getBool('mtproto_connected') ?? false;
+    return isMtproto
+        ? AppConstants.maxConcurrentUploadsAccount
+        : AppConstants.maxConcurrentUploads;
+  }
+
   Future<void> addUpload({
     required File file,
     String? folderId,
   }) async {
-    // Enforce 10-file concurrent limit
-    if (_activeCount >= AppConstants.maxConcurrentUploads) {
+    // Enforce concurrent-upload limit (10 for Bot API, 30 for Account/MTProto)
+    final limit = await _concurrentLimit();
+    if (_activeCount >= limit) {
       throw UploadLimitException(
-        'You can only upload ${AppConstants.maxConcurrentUploads} files at a time. '
+        'You can only upload $limit files at a time. '
         'Wait for current uploads to finish.',
       );
     }

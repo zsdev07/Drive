@@ -224,7 +224,7 @@ class _AccountPageState extends State<AccountPage>
             crossAxisCount: 2,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
-            childAspectRatio: 1.6,
+            childAspectRatio: 1.35,
           ),
           itemCount: benefits.length,
           itemBuilder: (_, i) => _BenefitCard(benefit: benefits[i]),
@@ -438,6 +438,7 @@ class _BenefitCard extends StatelessWidget {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             width: 36,
@@ -448,7 +449,7 @@ class _BenefitCard extends StatelessWidget {
             ),
             child: Icon(benefit.icon, color: benefit.color, size: 18),
           ),
-          const Spacer(),
+          const SizedBox(height: 10),
           Text(
             benefit.title,
             style: const TextStyle(
@@ -456,6 +457,8 @@ class _BenefitCard extends StatelessWidget {
               fontSize: 13,
               fontWeight: FontWeight.w700,
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 2),
           Text(
@@ -464,7 +467,7 @@ class _BenefitCard extends StatelessWidget {
               color: AppTheme.textSecondary,
               fontSize: 11,
             ),
-            maxLines: 1,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
         ],

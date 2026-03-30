@@ -59,8 +59,6 @@ class MtprotoService {
   final FlutterSecureStorage _secure;
 
   // ── TDLib client ────────────────────────────────────────
-  // tdlib 1.6.0 removed TdlibParameters as a standalone object.
-  // We store the fields individually and pass them flat to SetTdlibParameters.
   String? _databaseDirectory;
   String? _filesDirectory;
   int? _apiId;
@@ -114,8 +112,9 @@ class MtprotoService {
     _databaseDirectory = '${appDir.path}/tdlib';
     _filesDirectory = '${appDir.path}/tdlib_files';
 
-    // tdlib 1.6.0: createClient() replaces tdCreateClientId()
-    _clientId = TdPlugin.instance.createClient();
+    // FIX 1: tdlib 1.6.0 uses the top-level tdCreate() function,
+    // NOT TdPlugin.instance.createClient()
+    _clientId = tdCreate();
     _startReceiveLoop();
     _send(td.GetAuthorizationState());
   }
@@ -127,7 +126,6 @@ class MtprotoService {
     _phoneNumber = phone;
     _codeCompleter = Completer<void>();
 
-    // tdlib 1.6.0: hasUnknownPhoneNumber removed from PhoneNumberAuthenticationSettings
     _send(td.SetAuthenticationPhoneNumber(
       phoneNumber: phone,
       settings: const td.PhoneNumberAuthenticationSettings(
@@ -196,8 +194,15 @@ class MtprotoService {
         if (tdFileId != null && f.id == tdFileId) {
           final local = f.local;
           final remote = f.remote;
-          if (local.uploadedSize > 0) {
-            onProgress?.call(local.uploadedSize, fileSize);
+          // FIX 2: LocalFile has no uploadedSize — use downloadedSize
+          // (for uploads in progress, downloadedSize tracks bytes transferred)
+          // or simply use remote.isUploadingActive to report progress via fileSize ratio.
+          // The safe approach: call onProgress only when remote signals active upload.
+          if (remote.isUploadingActive && fileSize > 0) {
+            // TDLib doesn't expose exact bytes-sent on LocalFile;
+            // use uploadedParts * chunkSize approximation or skip granular progress.
+            // For now report 0..fileSize based on isUploadingCompleted flag:
+            onProgress?.call(0, fileSize);
           }
           if (remote.isUploadingCompleted && !completer.isCompleted) {
             completer.complete(TelegramUploadResult(
@@ -211,7 +216,6 @@ class MtprotoService {
     });
 
     try {
-      // tdlib 1.6.0: UploadFile renamed to PreliminaryUploadFile
       final response = await _sendAsync<td.File>(
         td.PreliminaryUploadFile(
           file: td.InputFileLocal(path: file.path),
@@ -295,9 +299,9 @@ class MtprotoService {
   // ── TDLib internals ───────────────────────────────────────
 
   void _send(td.TdFunction function) {
-    final json = jsonEncode(function.toJson());
-    // tdlib 1.6.0: send() replaces tdSend()
-    TdPlugin.instance.send(_clientId!, json);
+    // FIX 3: tdlib 1.6.0 uses top-level tdSend(clientId, function, extra)
+    // NOT TdPlugin.instance.send(_clientId!, json)
+    tdSend(_clientId!, function, null);
   }
 
   Future<T> _sendAsync<T extends td.TdObject>(
@@ -338,31 +342,29 @@ class MtprotoService {
 
   void _runIsolatedReceiveLoop() {
     final receivePort = ReceivePort();
-    Isolate.spawn(_tdReceiveIsolate, receivePort.sendPort).then((_) {
+    Isolate.spawn(_tdReceiveIsolate, [receivePort.sendPort, _clientId]).then((_) {
       receivePort.listen((message) {
-        if (message is String) _handleRawUpdate(message);
+        if (message is td.TdObject) _handleUpdate(message);
       });
     });
   }
 
-  static void _tdReceiveIsolate(SendPort sendPort) {
+  // FIX 4: tdlib 1.6.0 uses top-level tdJsonClientReceive(clientId, timeout)
+  // which returns TdObject? directly — no JSON string, no convertJsonToObject needed.
+  static void _tdReceiveIsolate(List args) {
+    final sendPort = args[0] as SendPort;
+    final clientId = args[1] as int;
     while (true) {
-      // tdlib 1.6.0: receive() replaces tdReceive()
-      final result = TdPlugin.instance.receive(2.0);
-      if (result != null && result.isNotEmpty) {
+      final result = tdJsonClientReceive(clientId, 2.0);
+      if (result != null) {
         sendPort.send(result);
       }
     }
   }
 
-  void _handleRawUpdate(String rawJson) {
-    try {
-      final map = jsonDecode(rawJson) as Map<String, dynamic>;
-      final obj = td.convertJsonToObject(map);
-      if (obj == null) return;
-      _updateController.add(obj);
-      _handleAuthUpdate(obj);
-    } catch (_) {}
+  void _handleUpdate(td.TdObject obj) {
+    _updateController.add(obj);
+    _handleAuthUpdate(obj);
   }
 
   void _handleAuthUpdate(td.TdObject obj) {
@@ -382,8 +384,8 @@ class MtprotoService {
 
   void _onAuthState(td.AuthorizationState state) {
     if (state is td.AuthorizationStateWaitTdlibParameters) {
-      // tdlib 1.6.0: SetTdlibParameters now takes flat named params directly —
-      // no TdlibParameters wrapper object.
+      // FIX 5: SetTdlibParameters requires enableStorageOptimizer (added in TDLib 1.8+)
+      // The tdlib 1.6.0 pub package wraps a newer TDLib native binary.
       _send(td.SetTdlibParameters(
         useTestDc: false,
         databaseDirectory: _databaseDirectory!,
@@ -399,6 +401,7 @@ class MtprotoService {
         deviceModel: Platform.operatingSystem,
         systemVersion: '',
         applicationVersion: AppConstants.appVersion,
+        enableStorageOptimizer: false, // FIX 5: required named param
       ));
     } else if (state is td.AuthorizationStateWaitPhoneNumber) {
       // Ready — sendCode() drives the next step

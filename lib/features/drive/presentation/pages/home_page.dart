@@ -14,6 +14,7 @@ import '../widgets/upload_queue_bar.dart';
 import '../widgets/folder_row.dart';
 import 'search_page.dart';
 import 'starred_page.dart';
+import 'trash_page.dart';
 import 'account_page.dart';
 
 class HomePage extends ConsumerStatefulWidget {
@@ -91,6 +92,24 @@ class _HomePageState extends ConsumerState<HomePage> {
                     onFolderTap: _openFolder,
                   ),
                   const StarredPage(),
+                  // Trash lives here — wrapped in Scaffold so ListTile always
+                  // has a Material ancestor regardless of the outer widget tree.
+                  Scaffold(
+                    backgroundColor: AppTheme.bgDark,
+                    appBar: AppBar(
+                      backgroundColor: AppTheme.bgDark,
+                      automaticallyImplyLeading: false,
+                      title: const Text(
+                        'Trash',
+                        style: TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    body: const TrashPage(),
+                  ),
                   const AccountPage(),
                 ],
               ),
@@ -372,6 +391,8 @@ class _HomePageState extends ConsumerState<HomePage> {
           icon: Icon(Icons.folder_rounded), label: 'Drive'),
       BottomNavigationBarItem(
           icon: Icon(Icons.star_rounded), label: 'Starred'),
+      BottomNavigationBarItem(
+          icon: Icon(Icons.delete_outline_rounded), label: 'Trash'),
       BottomNavigationBarItem(
           icon: Icon(Icons.person_rounded), label: 'Account'),
     ];

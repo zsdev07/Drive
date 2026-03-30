@@ -141,7 +141,10 @@ class _TrashFileCard extends ConsumerWidget {
     final fileType = ZXFileTypeX.fromMime(file.mimeType);
     final repo = ref.read(fileRepositoryProvider);
 
-    return Container(
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
       decoration: BoxDecoration(
         color: AppTheme.bgCard,
         borderRadius: BorderRadius.circular(12),
@@ -207,6 +210,7 @@ class _TrashFileCard extends ConsumerWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

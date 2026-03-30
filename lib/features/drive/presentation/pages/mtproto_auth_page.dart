@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/services/mtproto_service.dart';
 import '../providers/drive_providers.dart';
+import 'mtproto_credentials_page.dart';
 import 'mtproto_instructions_page.dart';
 import 'mtproto_otp_page.dart';
 
@@ -100,20 +101,44 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    // Check credentials as soon as the page mounts.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkCredentials());
+  }
+
+  @override
   void dispose() {
     _phoneCtrl.dispose();
     _phoneFocus.dispose();
     super.dispose();
   }
 
+  // ── Credential gate ───────────────────────────────────────
+
+  Future<void> _checkCredentials() async {
+    final service = ref.read(mtprotoServiceProvider);
+    final has = await service.hasCredentials();
+    if (!has && mounted) {
+      // Navigate to credentials page; pop back here when done.
+      final saved = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => const MtprotoCredentialsPage()),
+      );
+      if (saved != true && mounted) {
+        // User cancelled — go back.
+        Navigator.pop(context);
+      }
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────
 
   String _digitsOnly(String s) => s.replaceAll(RegExp(r'\D'), '');
-
-  /// Clean E.164 string sent to TDLib — e.g. "+917501869783"
   String get _e164 => '${_selected.dialCode}${_digitsOnly(_phoneCtrl.text)}';
 
-  // ── Country picker bottom sheet ───────────────────────────
+  // ── Country picker ────────────────────────────────────────
 
   void _showCountryPicker() {
     final searchCtrl = TextEditingController();
@@ -136,7 +161,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
             builder: (_, scrollCtrl) {
               return Column(
                 children: [
-                  // Handle
                   const SizedBox(height: 12),
                   Container(
                     width: 40,
@@ -147,7 +171,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  // Title
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 20),
                     child: Align(
@@ -163,7 +186,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  // Search
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: TextField(
@@ -180,7 +202,8 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                                     color: AppTheme.textSecondary, size: 18),
                                 onPressed: () {
                                   searchCtrl.clear();
-                                  setSheet(() => filtered = List.from(_kCountries));
+                                  setSheet(
+                                      () => filtered = List.from(_kCountries));
                                 },
                               )
                             : null,
@@ -199,7 +222,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                   ),
                   const SizedBox(height: 8),
                   const Divider(color: Color(0xFF2A2D45), height: 1),
-                  // Country list
                   Expanded(
                     child: ListView.builder(
                       controller: scrollCtrl,
@@ -277,16 +299,25 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
 
   Future<void> _sendCode() async {
     if (!_formKey.currentState!.validate()) return;
+
+    // Re-check credentials in case they were cleared.
+    final service = ref.read(mtprotoServiceProvider);
+    final has = await service.hasCredentials();
+    if (!has) {
+      final saved = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (_) => const MtprotoCredentialsPage()),
+      );
+      if (saved != true) return;
+    }
+
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
-    final mtproto = ref.read(mtprotoServiceProvider);
-
     try {
-      await mtproto.init();
-      await mtproto.sendCode(_e164); // always clean E.164
+      await service.sendCode(_e164);
 
       if (!mounted) return;
 
@@ -319,6 +350,19 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
               color: AppTheme.textPrimary, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          // Allow editing credentials from this page.
+          IconButton(
+            tooltip: 'Edit API credentials',
+            icon: const Icon(Icons.key_rounded,
+                color: AppTheme.textSecondary, size: 20),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const MtprotoCredentialsPage()),
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -372,7 +416,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Country button
                     GestureDetector(
                       onTap: _showCountryPicker,
                       child: Container(
@@ -407,8 +450,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                       ),
                     ),
                     const SizedBox(width: 10),
-
-                    // Number field
                     Expanded(
                       child: TextFormField(
                         controller: _phoneCtrl,
@@ -450,7 +491,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                   ],
                 ),
 
-                // E.164 preview pill — shows what gets sent to TDLib
                 if (_phoneCtrl.text.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -482,7 +522,6 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                   ),
                 ],
 
-                // Error
                 if (_error != null) ...[
                   const SizedBox(height: 14),
                   Container(
@@ -530,7 +569,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Make sure your API ID & Hash are set in .env before proceeding.',
+                              'A code will be sent to your Telegram app. No .env required — credentials are stored securely on device.',
                               style: TextStyle(
                                 color: AppTheme.textSecondary,
                                 fontSize: 12,

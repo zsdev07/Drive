@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
-import 'trash_page.dart';
 
 class MtprotoProfilePage extends StatelessWidget {
   final String name;
@@ -169,10 +168,14 @@ class MtprotoProfilePage extends StatelessWidget {
               iconColor: AppTheme.error,
               title: 'Trash',
               subtitle: 'Deleted files waiting for permanent removal',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TrashPage()),
-              ),
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Tap the Trash tab in the bottom nav'),
+                    backgroundColor: AppTheme.bgCard,
+                  ),
+                );
+              },
             ),
             const Divider(height: 1, color: AppTheme.bgSurface),
             _MenuItem(

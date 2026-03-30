@@ -1,18 +1,45 @@
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/database/app_database.dart';
 import '../../../../core/database/database_provider.dart';
 import '../../../../core/services/telegram_service.dart';
+import '../../../../core/services/mtproto_service.dart';
 import '../../data/repositories/file_repository.dart';
 import '../../domain/models/zx_file.dart';
+
+// ── Auth mode ─────────────────────────────────────────────
+
+enum AuthMode { bot, mtproto }
+
+/// Reads the [AppConstants.keyMtprotoConnected] flag from SharedPreferences
+/// and returns the active auth mode. Async because SharedPrefs is async.
+final authModeProvider = FutureProvider<AuthMode>((ref) async {
+  final prefs = await SharedPreferences.getInstance();
+  final connected = prefs.getBool(AppConstants.keyMtprotoConnected) ?? false;
+  return connected ? AuthMode.mtproto : AuthMode.bot;
+});
 
 // ── Services ──────────────────────────────────────────────
 
 final telegramServiceProvider = Provider<TelegramService>((ref) {
   return TelegramService();
+});
+
+final secureStorageProvider = Provider<FlutterSecureStorage>((ref) {
+  return const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+  );
+});
+
+final mtprotoServiceProvider = Provider<MtprotoService>((ref) {
+  final db = ref.watch(databaseProvider);
+  final secure = ref.watch(secureStorageProvider);
+  return MtprotoService(db: db, secureStorage: secure);
 });
 
 // ── Repositories ──────────────────────────────────────────
@@ -21,6 +48,7 @@ final fileRepositoryProvider = Provider<FileRepository>((ref) {
   return FileRepository(
     ref.watch(databaseProvider),
     ref.watch(telegramServiceProvider),
+    ref.watch(mtprotoServiceProvider),
   );
 });
 
@@ -101,13 +129,11 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
   int get _activeCount =>
       state.where((t) => t.status == UploadStatus.uploading).length;
 
-  /// Returns the concurrent-upload ceiling for the current session.
-  /// Once MTProto (account auth) is wired up, this will read the session flag.
-  /// For now it reads SharedPreferences synchronously via a cached value set
-  /// at notifier creation — we keep it simple until TDLib lands.
+  /// Returns the concurrent-upload ceiling.
+  /// Reads the mtproto_connected flag from SharedPreferences.
   Future<int> _concurrentLimit() async {
     final prefs = await SharedPreferences.getInstance();
-    final isMtproto = prefs.getBool('mtproto_connected') ?? false;
+    final isMtproto = prefs.getBool(AppConstants.keyMtprotoConnected) ?? false;
     return isMtproto
         ? AppConstants.maxConcurrentUploadsAccount
         : AppConstants.maxConcurrentUploads;
@@ -117,7 +143,6 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
     required File file,
     String? folderId,
   }) async {
-    // Enforce concurrent-upload limit (10 for Bot API, 30 for Account/MTProto)
     final limit = await _concurrentLimit();
     if (_activeCount >= limit) {
       throw UploadLimitException(
@@ -129,10 +154,9 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
     final fileName = file.path.split('/').last;
     final fileSize = await file.length();
 
-    // Enforce 2 GB file size limit
     if (fileSize > AppConstants.maxUploadBytes) {
       throw UploadLimitException(
-        '${fileName} exceeds the 2 GB file limit.',
+        '$fileName exceeds the 2 GB file limit.',
       );
     }
 
@@ -184,10 +208,12 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
 
       await Future.delayed(const Duration(seconds: 3));
       state = state.where((t) => t.uploadId != task.uploadId).toList();
-
     } on TelegramApiException catch (e) {
       _updateTaskStatus(task.uploadId, UploadStatus.failed,
           error: 'Telegram ${e.errorCode}: ${e.description}');
+    } on MtprotoException catch (e) {
+      _updateTaskStatus(task.uploadId, UploadStatus.failed,
+          error: e.toString());
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
         _updateTaskStatus(task.uploadId, UploadStatus.paused);

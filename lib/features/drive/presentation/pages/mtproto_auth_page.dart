@@ -7,6 +7,7 @@ import '../providers/drive_providers.dart';
 import 'mtproto_credentials_page.dart';
 import 'mtproto_instructions_page.dart';
 import 'mtproto_otp_page.dart';
+import 'qr_login_page.dart';
 
 // ── Country model ─────────────────────────────────────────────────────────────
 
@@ -96,14 +97,13 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
   final _phoneCtrl = TextEditingController();
   final _phoneFocus = FocusNode();
 
-  _Country _selected = _kCountries.first; // India by default
+  _Country _selected = _kCountries.first;
   bool _isLoading = false;
   String? _error;
 
   @override
   void initState() {
     super.initState();
-    // Check credentials as soon as the page mounts.
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkCredentials());
   }
 
@@ -117,19 +117,14 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
   // ── Credential gate ───────────────────────────────────────
 
   Future<void> _checkCredentials() async {
-    final service = ref.read(mtprotoServiceProvider);
+    final service = await ref.read(mtprotoServiceProvider.future);
     final has = await service.hasCredentials();
     if (!has && mounted) {
-      // Navigate to credentials page; pop back here when done.
       final saved = await Navigator.push<bool>(
         context,
-        MaterialPageRoute(
-            builder: (_) => const MtprotoCredentialsPage()),
+        MaterialPageRoute(builder: (_) => const MtprotoCredentialsPage()),
       );
-      if (saved != true && mounted) {
-        // User cancelled — go back.
-        Navigator.pop(context);
-      }
+      if (saved != true && mounted) Navigator.pop(context);
     }
   }
 
@@ -163,8 +158,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                 children: [
                   const SizedBox(height: 12),
                   Container(
-                    width: 40,
-                    height: 4,
+                    width: 40, height: 4,
                     decoration: BoxDecoration(
                       color: AppTheme.textSecondary.withOpacity(0.3),
                       borderRadius: BorderRadius.circular(2),
@@ -175,14 +169,12 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                     padding: EdgeInsets.symmetric(horizontal: 20),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Select Country',
-                        style: TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      child: Text('Select Country',
+                          style: TextStyle(
+                            color: AppTheme.textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          )),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -202,8 +194,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                                     color: AppTheme.textSecondary, size: 18),
                                 onPressed: () {
                                   searchCtrl.clear();
-                                  setSheet(
-                                      () => filtered = List.from(_kCountries));
+                                  setSheet(() => filtered = List.from(_kCountries));
                                 },
                               )
                             : null,
@@ -251,29 +242,25 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                                     style: const TextStyle(fontSize: 24)),
                                 const SizedBox(width: 14),
                                 Expanded(
-                                  child: Text(
-                                    c.name,
+                                  child: Text(c.name,
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? AppTheme.primary
+                                            : AppTheme.textPrimary,
+                                        fontSize: 15,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                      )),
+                                ),
+                                Text(c.dialCode,
                                     style: TextStyle(
                                       color: isSelected
                                           ? AppTheme.primary
-                                          : AppTheme.textPrimary,
-                                      fontSize: 15,
-                                      fontWeight: isSelected
-                                          ? FontWeight.w600
-                                          : FontWeight.w400,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  c.dialCode,
-                                  style: TextStyle(
-                                    color: isSelected
-                                        ? AppTheme.primary
-                                        : AppTheme.textSecondary,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
+                                          : AppTheme.textSecondary,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    )),
                                 if (isSelected) ...[
                                   const SizedBox(width: 8),
                                   const Icon(Icons.check_circle_rounded,
@@ -300,8 +287,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
   Future<void> _sendCode() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // Re-check credentials in case they were cleared.
-    final service = ref.read(mtprotoServiceProvider);
+    final service = await ref.read(mtprotoServiceProvider.future);
     final has = await service.hasCredentials();
     if (!has) {
       final saved = await Navigator.push<bool>(
@@ -311,21 +297,16 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
       if (saved != true) return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+    setState(() { _isLoading = true; _error = null; });
 
     try {
       await service.sendCode(_e164);
-
       if (!mounted) return;
 
       final result = await Navigator.push<Map<String, String>>(
         context,
         MaterialPageRoute(builder: (_) => MtprotoOtpPage(phone: _e164)),
       );
-
       if (result != null && mounted) Navigator.pop(context, result);
     } on MtprotoException catch (e) {
       setState(() => _error = e.message);
@@ -334,6 +315,26 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  // ── QR login ──────────────────────────────────────────────
+
+  Future<void> _openQrLogin() async {
+    final service = await ref.read(mtprotoServiceProvider.future);
+    final has = await service.hasCredentials();
+    if (!has && mounted) {
+      final saved = await Navigator.push<bool>(
+        context,
+        MaterialPageRoute(builder: (_) => const MtprotoCredentialsPage()),
+      );
+      if (saved != true) return;
+    }
+    if (!mounted) return;
+    final result = await Navigator.push<Map<String, String>>(
+      context,
+      MaterialPageRoute(builder: (_) => const QrLoginPage()),
+    );
+    if (result != null && mounted) Navigator.pop(context, result);
   }
 
   // ── Build ─────────────────────────────────────────────────
@@ -351,15 +352,13 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          // Allow editing credentials from this page.
           IconButton(
             tooltip: 'Edit API credentials',
             icon: const Icon(Icons.key_rounded,
                 color: AppTheme.textSecondary, size: 20),
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(
-                  builder: (_) => const MtprotoCredentialsPage()),
+              MaterialPageRoute(builder: (_) => const MtprotoCredentialsPage()),
             ),
           ),
         ],
@@ -372,10 +371,10 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Icon
+
+                // ── Header icon ─────────────────────────────
                 Container(
-                  width: 56,
-                  height: 56,
+                  width: 56, height: 56,
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
                       colors: [AppTheme.primary, AppTheme.accent],
@@ -389,30 +388,25 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                 ),
                 const SizedBox(height: 24),
 
-                const Text(
-                  'Auth Your Account',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.5,
-                  ),
-                ),
+                const Text('Auth Your Account',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                    )),
                 const SizedBox(height: 8),
                 const Text(
                   'Connect via MTProto for 2 GB uploads,\nblazing downloads, and no limits.',
                   style: TextStyle(
-                    color: AppTheme.textSecondary,
-                    fontSize: 14,
-                    height: 1.6,
-                  ),
+                    color: AppTheme.textSecondary, fontSize: 14, height: 1.6),
                 ),
                 const SizedBox(height: 36),
 
                 const _FieldLabel('Phone Number'),
                 const SizedBox(height: 8),
 
-                // ── Country picker + number ───────────────
+                // ── Country picker + number field ────────────
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -425,8 +419,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                           color: AppTheme.bgSurface,
                           borderRadius: BorderRadius.circular(14),
                           border: const Border.fromBorderSide(
-                            BorderSide(color: Color(0xFF2A2D45), width: 1),
-                          ),
+                              BorderSide(color: Color(0xFF2A2D45), width: 1)),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -434,14 +427,12 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                             Text(_selected.flag,
                                 style: const TextStyle(fontSize: 22)),
                             const SizedBox(width: 6),
-                            Text(
-                              _selected.dialCode,
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
+                            Text(_selected.dialCode,
+                                style: const TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                )),
                             const SizedBox(width: 4),
                             const Icon(Icons.keyboard_arrow_down_rounded,
                                 color: AppTheme.textSecondary, size: 18),
@@ -491,6 +482,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                   ],
                 ),
 
+                // ── E164 preview ─────────────────────────────
                 if (_phoneCtrl.text.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -508,20 +500,19 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                         const Icon(Icons.check_circle_outline_rounded,
                             color: AppTheme.primary, size: 13),
                         const SizedBox(width: 5),
-                        Text(
-                          _e164,
-                          style: const TextStyle(
-                            color: AppTheme.primary,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
+                        Text(_e164,
+                            style: const TextStyle(
+                              color: AppTheme.primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5,
+                            )),
                       ],
                     ),
                   ),
                 ],
 
+                // ── Error banner ─────────────────────────────
                 if (_error != null) ...[
                   const SizedBox(height: 14),
                   Container(
@@ -549,7 +540,7 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
 
                 const SizedBox(height: 28),
 
-                // Instructions card
+                // ── Instructions card ─────────────────────────
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
@@ -578,21 +569,16 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
                             ),
                             const SizedBox(height: 4),
                             GestureDetector(
-                              onTap: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      const MtprotoInstructionsPage(),
-                                ),
-                              ),
-                              child: const Text(
-                                'See Instructions →',
-                                style: TextStyle(
-                                  color: AppTheme.primary,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
+                              onTap: () => Navigator.push(context,
+                                  MaterialPageRoute(
+                                      builder: (_) =>
+                                          const MtprotoInstructionsPage())),
+                              child: const Text('See Instructions →',
+                                  style: TextStyle(
+                                    color: AppTheme.primary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  )),
                             ),
                           ],
                         ),
@@ -603,20 +589,63 @@ class _MtprotoAuthPageState extends ConsumerState<MtprotoAuthPage> {
 
                 const SizedBox(height: 36),
 
+                // ── Send Code button ──────────────────────────
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _sendCode,
                     child: _isLoading
                         ? const SizedBox(
-                            height: 20,
-                            width: 20,
+                            height: 20, width: 20,
                             child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2),
-                          )
+                                color: Colors.white, strokeWidth: 2))
                         : const Text('Send Code'),
                   ),
                 ),
+
+                const SizedBox(height: 16),
+
+                // ── Divider ───────────────────────────────────
+                Row(
+                  children: [
+                    Expanded(
+                        child: Divider(
+                            color: AppTheme.textSecondary.withOpacity(0.2),
+                            thickness: 1)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('or',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary.withOpacity(0.6),
+                              fontSize: 12)),
+                    ),
+                    Expanded(
+                        child: Divider(
+                            color: AppTheme.textSecondary.withOpacity(0.2),
+                            thickness: 1)),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                // ── QR Code login button ──────────────────────
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _isLoading ? null : _openQrLogin,
+                    icon: const Icon(Icons.qr_code_rounded, size: 18),
+                    label: const Text('Log in with QR Code'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      side: BorderSide(
+                          color: AppTheme.primary.withOpacity(0.45), width: 1),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
+                    ),
+                  ),
+                ),
+
                 const SizedBox(height: 24),
               ],
             ),
@@ -635,13 +664,11 @@ class _FieldLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        color: AppTheme.textPrimary,
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-      ),
-    );
+    return Text(text,
+        style: const TextStyle(
+          color: AppTheme.textPrimary,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+        ));
   }
 }

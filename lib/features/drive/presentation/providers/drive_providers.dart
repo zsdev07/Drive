@@ -15,8 +15,6 @@ import '../../domain/models/zx_file.dart';
 
 enum AuthMode { bot, mtproto }
 
-/// Reads the [AppConstants.keyMtprotoConnected] flag from SharedPreferences
-/// and returns the active auth mode. Async because SharedPrefs is async.
 final authModeProvider = FutureProvider<AuthMode>((ref) async {
   final prefs = await SharedPreferences.getInstance();
   final connected = prefs.getBool(AppConstants.keyMtprotoConnected) ?? false;
@@ -36,19 +34,42 @@ final secureStorageProvider = Provider<FlutterSecureStorage>((ref) {
   );
 });
 
-final mtprotoServiceProvider = Provider<MtprotoService>((ref) {
-  final db = ref.watch(databaseProvider);
+/// MtprotoService is now a FutureProvider because init() restores the session
+/// asynchronously on startup. Widgets should use .when() or .valueOrNull.
+final mtprotoServiceProvider = FutureProvider<MtprotoService>((ref) async {
+  final db     = ref.watch(databaseProvider);
   final secure = ref.watch(secureStorageProvider);
-  return MtprotoService(db: db, secureStorage: secure);
+  final service = MtprotoService(db: db, secureStorage: secure);
+  await service.init();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Convenience: stream of auth state changes. Widgets can watch this directly.
+final mtprotoAuthStateProvider = StreamProvider<MtprotoAuthState>((ref) async* {
+  final service = await ref.watch(mtprotoServiceProvider.future);
+  yield service.authState;
+  yield* service.authStateStream;
+});
+
+/// Current QR token — non-null only while in waitingQrScan state.
+final mtprotoQrTokenProvider = StreamProvider<MtprotoQrToken?>((ref) async* {
+  final service = await ref.watch(mtprotoServiceProvider.future);
+  yield service.currentQrToken;
+  await for (final state in service.authStateStream) {
+    yield state == MtprotoAuthState.waitingQrScan ? service.currentQrToken : null;
+  }
 });
 
 // ── Repositories ──────────────────────────────────────────
 
 final fileRepositoryProvider = Provider<FileRepository>((ref) {
+  // MtprotoService may still be loading; pass null-safe fallback.
+  final mtproto = ref.watch(mtprotoServiceProvider).valueOrNull;
   return FileRepository(
     ref.watch(databaseProvider),
     ref.watch(telegramServiceProvider),
-    ref.watch(mtprotoServiceProvider),
+    mtproto,
   );
 });
 
@@ -107,10 +128,7 @@ class SelectionNotifier extends StateNotifier<Set<String>> {
     }
   }
 
-  void selectAll(List<String> uuids) {
-    state = uuids.toSet();
-  }
-
+  void selectAll(List<String> uuids) => state = uuids.toSet();
   void clear() => state = {};
 }
 
@@ -129,8 +147,6 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
   int get _activeCount =>
       state.where((t) => t.status == UploadStatus.uploading).length;
 
-  /// Returns the concurrent-upload ceiling.
-  /// Reads the mtproto_connected flag from SharedPreferences.
   Future<int> _concurrentLimit() async {
     final prefs = await SharedPreferences.getInstance();
     final isMtproto = prefs.getBool(AppConstants.keyMtprotoConnected) ?? false;
@@ -139,25 +155,18 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
         : AppConstants.maxConcurrentUploads;
   }
 
-  Future<void> addUpload({
-    required File file,
-    String? folderId,
-  }) async {
+  Future<void> addUpload({required File file, String? folderId}) async {
     final limit = await _concurrentLimit();
     if (_activeCount >= limit) {
       throw UploadLimitException(
-        'You can only upload $limit files at a time. '
-        'Wait for current uploads to finish.',
-      );
+          'You can only upload $limit files at a time. Wait for current uploads to finish.');
     }
 
     final fileName = file.path.split('/').last;
     final fileSize = await file.length();
 
     if (fileSize > AppConstants.maxUploadBytes) {
-      throw UploadLimitException(
-        '$fileName exceeds the 2 GB file limit.',
-      );
+      throw UploadLimitException('$fileName exceeds the 2 GB file limit.');
     }
 
     final task = UploadTask(
@@ -179,14 +188,11 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
             for (final t in state)
               if (t.uploadId == task.uploadId)
                 UploadTask(
-                  uploadId: t.uploadId,
-                  fileName: t.fileName,
-                  totalBytes: t.totalBytes,
-                  sentBytes: sent,
+                  uploadId: t.uploadId, fileName: t.fileName,
+                  totalBytes: t.totalBytes, sentBytes: sent,
                   status: UploadStatus.uploading,
                 )
-              else
-                t,
+              else t,
           ];
         },
         cancelToken: cancelToken,
@@ -196,52 +202,42 @@ class UploadNotifier extends StateNotifier<List<UploadTask>> {
         for (final t in state)
           if (t.uploadId == task.uploadId)
             UploadTask(
-              uploadId: t.uploadId,
-              fileName: t.fileName,
-              totalBytes: t.totalBytes,
-              sentBytes: t.totalBytes,
+              uploadId: t.uploadId, fileName: t.fileName,
+              totalBytes: t.totalBytes, sentBytes: t.totalBytes,
               status: UploadStatus.done,
             )
-          else
-            t,
+          else t,
       ];
 
       await Future.delayed(const Duration(seconds: 3));
       state = state.where((t) => t.uploadId != task.uploadId).toList();
     } on TelegramApiException catch (e) {
-      _updateTaskStatus(task.uploadId, UploadStatus.failed,
+      _updateStatus(task.uploadId, UploadStatus.failed,
           error: 'Telegram ${e.errorCode}: ${e.description}');
     } on MtprotoException catch (e) {
-      _updateTaskStatus(task.uploadId, UploadStatus.failed,
-          error: e.toString());
+      _updateStatus(task.uploadId, UploadStatus.failed, error: e.toString());
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {
-        _updateTaskStatus(task.uploadId, UploadStatus.paused);
+        _updateStatus(task.uploadId, UploadStatus.paused);
       } else {
-        _updateTaskStatus(task.uploadId, UploadStatus.failed,
+        _updateStatus(task.uploadId, UploadStatus.failed,
             error: e.message ?? 'Network error');
       }
     } catch (e) {
-      _updateTaskStatus(task.uploadId, UploadStatus.failed,
-          error: e.toString());
+      _updateStatus(task.uploadId, UploadStatus.failed, error: e.toString());
     }
   }
 
-  void _updateTaskStatus(String uploadId, UploadStatus status,
-      {String? error}) {
+  void _updateStatus(String uploadId, UploadStatus status, {String? error}) {
     state = [
       for (final t in state)
         if (t.uploadId == uploadId)
           UploadTask(
-            uploadId: t.uploadId,
-            fileName: t.fileName,
-            totalBytes: t.totalBytes,
-            sentBytes: t.sentBytes,
-            status: status,
-            errorMessage: error,
+            uploadId: t.uploadId, fileName: t.fileName,
+            totalBytes: t.totalBytes, sentBytes: t.sentBytes,
+            status: status, errorMessage: error,
           )
-        else
-          t,
+        else t,
     ];
   }
 

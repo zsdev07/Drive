@@ -14,7 +14,7 @@ import '../widgets/upload_queue_bar.dart';
 import '../widgets/folder_row.dart';
 import 'search_page.dart';
 import 'starred_page.dart';
-import 'trash_page.dart';
+import 'account_page.dart';
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -91,7 +91,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     onFolderTap: _openFolder,
                   ),
                   const StarredPage(),
-                  const TrashPage(),
+                  const AccountPage(),
                 ],
               ),
             ),
@@ -373,7 +373,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       BottomNavigationBarItem(
           icon: Icon(Icons.star_rounded), label: 'Starred'),
       BottomNavigationBarItem(
-          icon: Icon(Icons.delete_rounded), label: 'Trash'),
+          icon: Icon(Icons.person_rounded), label: 'Account'),
     ];
 
     return BottomNavigationBar(

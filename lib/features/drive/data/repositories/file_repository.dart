@@ -73,10 +73,30 @@ class FileRepository {
       );
     }
 
-    // getApplicationDocumentsDirectory() is always accessible without
-    // any runtime permissions on Android and iOS — no WRITE_EXTERNAL_STORAGE needed.
-    final appDir = await getApplicationDocumentsDirectory();
-    final saveDir = Directory('${appDir.path}/ZX Drive Downloads');
+    // On Android: save to /storage/emulated/0/Download — the real shared
+    // Downloads folder visible to every file manager. No permissions needed
+    // on Android 10+ because we write only to this public directory.
+    // On iOS / fallback: use app documents (iOS has no shared Downloads).
+    Directory saveDir;
+    if (Platform.isAndroid) {
+      // Walk up from getExternalStorageDirectory() (e.g. /storage/emulated/0/Android/data/…)
+      // to find /storage/emulated/0, then append Download.
+      try {
+        final extDir = await getExternalStorageDirectory();
+        // extDir.path is like /storage/emulated/0/Android/data/<pkg>/files
+        // Split on '/Android/' to get the root: /storage/emulated/0
+        final root = extDir!.path.split('/Android/').first;
+        saveDir = Directory('$root/Download');
+      } catch (_) {
+        // Fallback: app documents (won't appear in file manager, but won't crash)
+        final appDir = await getApplicationDocumentsDirectory();
+        saveDir = Directory('${appDir.path}/ZX Drive Downloads');
+      }
+    } else {
+      // iOS — app documents directory is the only writable option
+      final appDir = await getApplicationDocumentsDirectory();
+      saveDir = Directory('${appDir.path}/ZX Drive Downloads');
+    }
     await saveDir.create(recursive: true);
 
     // Avoid silently overwriting an existing file with the same name

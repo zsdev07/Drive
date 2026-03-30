@@ -25,6 +25,8 @@ dependencies:
 
   # Telegram API (HTTP — Bot API + MTProto auth via dio)
   dio: ^5.4.3+1
+  telegram: ^0.2.0
+  qr_flutter: ^4.1.0
 
   # File Handling
   file_picker: ^8.0.3

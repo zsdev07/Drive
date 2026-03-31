@@ -13,7 +13,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 import 'dart:io' as io;
-import 'package:handy_tdlib/api.dart' as td;
+import 'package:handy_tdlib/tdapi.dart' as td;
 import 'package:handy_tdlib/handy_tdlib.dart';
 import 'package:path_provider/path_provider.dart';
 import '../constants/app_constants.dart';

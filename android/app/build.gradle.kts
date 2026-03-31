@@ -26,6 +26,13 @@ android {
         versionName = flutter.versionName
     }
 
+    // ── Tell Gradle where the manually bundled .so files live ──
+    sourceSets {
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
+        }
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")

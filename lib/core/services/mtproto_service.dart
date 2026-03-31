@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:handy_tdlib/tdapi.dart' as td;
+import 'package:handy_tdlib/api.dart' as td;
 
 import '../constants/app_constants.dart';
 import '../database/app_database.dart';

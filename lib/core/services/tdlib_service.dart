@@ -12,11 +12,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
-import 'dart:io' as io; // Add 'as io'
+import 'dart:io' as io; // Essential: Prefix dart:io to avoid 'File' conflict
 import 'package:handy_tdlib/tdapi.dart' as td;
 import 'package:handy_tdlib/handy_tdlib.dart';
 import 'package:path_provider/path_provider.dart';
-
 import '../constants/app_constants.dart';
 
 // ═══════════════════════════════════════════════════════════
@@ -237,25 +236,26 @@ class TdlibService {
     )) as td.File;
 
     if (downloaded.local.isDownloadingCompleted) {
-      // Copy from TDLib cache to desired save path
+      // FIX 1: Use io.File instead of File
       await io.File(downloaded.local.path).copy(savePath);
       return savePath;
     }
+
     // Await via update stream if not yet done
     await for (final update in updates) {
       if (update is td.UpdateFile) {
         final f = update.file;
         if (f.id == id) {
-          onProgress?.call(f.local.downloadedSize, f.expectedSize);
+          onProgress?.call(f.local.downloadedSize, f.expectedSize ?? 0);
           if (f.local.isDownloadingCompleted) {
-            await File(f.local.path).copy(savePath);
+            // FIX 2: Use io.File here as well
+            await io.File(f.local.path).copy(savePath);
             return savePath;
           }
         }
       }
     }
-
-    throw TdlibException('Download did not complete.', code: 'DOWNLOAD_FAILED');
+    throw TdlibException('Download failed', code: 'DOWNLOAD_FAILED');
   }
 
   // ── Dispose ───────────────────────────────────────────────
@@ -290,10 +290,10 @@ class TdlibService {
   }
 
   td.FileType _fileTypeFromMime(String mime) {
-    if (mime.startsWith('image/')) return const td.FileTypePhoto();
-    if (mime.startsWith('video/')) return const td.FileTypeVideo();
-    if (mime.startsWith('audio/')) return const td.FileTypeAudio();
-    return const td.FileTypeDocument();
+    if (mime.startsWith('image/')) return td.FileTypePhoto();
+    if (mime.startsWith('video/')) return td.FileTypeVideo();
+    if (mime.startsWith('audio/')) return td.FileTypeAudio();
+    return td.FileTypeDocument();
   }
 }
 
@@ -323,16 +323,14 @@ void _updatesLoop(SendPort mainSendPort) {
 
   // Receive loop — this runs forever on this isolate
   while (true) {
-    final response = TdPlugin.instance.tdReceive(clientId);
+    // FIX 4: Ensure clientId is passed as the correct type.
+    // If your error said 'int' can't be assigned to 'double', use .toDouble()
+    final response = TdPlugin.instance.tdReceive(clientId.toDouble()); 
     if (response != null) {
       try {
         final obj = convertJsonToObject(response);
-        if (obj != null) {
-          mainSendPort.send(_UpdateMsg(obj));
-        }
-      } catch (_) {
-        // Ignore parse errors for unknown TDLib object types
-      }
+        if (obj != null) mainSendPort.send(_UpdateMsg(obj));
+      } catch (_) {}
     }
   }
 }

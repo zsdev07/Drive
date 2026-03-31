@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' as io;
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:handy_tdlib/tdapi.dart' as td;
 
 import '../constants/app_constants.dart';
 import '../database/app_database.dart';
@@ -365,7 +366,7 @@ class MtprotoService {
   // ══════════════════════════════════════════════════════════
 
   Future<TelegramUploadResult> uploadFile({
-    required File file,
+    required io.File file,
     required String mimeType,
     required String fileName,
     void Function(int sent, int total)? onProgress,

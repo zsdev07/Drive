@@ -180,7 +180,7 @@ class TdlibService {
   final fileSize = await file.length(); // This will work now!
   
     // 1. Tell TDLib to upload the file
-    final uploadedFile = await _send(td.UploadFile(
+    final uploadedFile = await _send(td.PreliminaryUploadFile(
       file: td.InputFileLocal(path: file.path),
       fileType: _fileTypeFromMime(mimeType),
       priority: 1,

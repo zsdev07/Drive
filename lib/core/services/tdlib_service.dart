@@ -12,8 +12,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
-import 'dart:io' as io; // Essential: Prefix dart:io to avoid 'File' conflict
-import 'package:handy_tdlib/tdapi.dart' as td;
+import 'dart:io' as io;
+import 'package:handy_tdlib/api.dart' as td;
 import 'package:handy_tdlib/handy_tdlib.dart';
 import 'package:path_provider/path_provider.dart';
 import '../constants/app_constants.dart';
@@ -88,7 +88,7 @@ class TdlibService {
 
     final docsDir = await getApplicationDocumentsDirectory();
     final dbPath  = '${docsDir.path}/${AppConstants.tdlibDbName}';
-    await Directory(dbPath).create(recursive: true);
+    await io.Directory(dbPath).create(recursive: true);
 
     // ── 1. Set up the updates ReceivePort on the main isolate ──
     final updatesReceivePort = ReceivePort();

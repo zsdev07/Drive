@@ -27,6 +27,9 @@ class AppConstants {
   static const String secureKeyDcId = 'mtproto_dc_id';
   static const String secureKeyServerSalt = 'mtproto_server_salt';
 
+  // ── TDLib ──────────────────────────────────────────────
+  static const String tdlibDbName = 'zx_drive_tdlib';
+
   // ── Upload / download limits ───────────────────────────
   static const int maxUploadBytes = 2 * 1024 * 1024 * 1024; // 2 GB
   static const int maxConcurrentUploads = 10;          // Bot API tier

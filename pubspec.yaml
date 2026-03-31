@@ -23,10 +23,14 @@ dependencies:
   # Navigation
   go_router: ^13.2.0
 
-  # Telegram API (HTTP — Bot API + MTProto auth via dio)
+  # Telegram API — MTProto pure-Dart + Bot API fallback
   dio: ^5.4.3+1
-  telegram: ^1.0.0
+
+  # QR code rendering (for QR login page)
   qr_flutter: ^4.1.0
+
+  # AES-IGE + PBKDF2 for MTProto crypto (pure Dart, no NDK)
+  pointycastle: ^3.9.1
 
   # File Handling
   file_picker: ^8.0.3

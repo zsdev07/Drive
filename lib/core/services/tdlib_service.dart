@@ -11,10 +11,9 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:isolate';
-
-import 'package:handy_tdlib/api.dart' as td;
+import 'dart:io' as io; // Add 'as io'
+import 'package:handy_tdlib/tdapi.dart' as td;
 import 'package:handy_tdlib/handy_tdlib.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -169,17 +168,18 @@ class TdlibService {
 
   // ── Upload a file to a Telegram channel via MTProto ──────
 
+  // 1. Change the parameter type to io.File
   Future<TdlibUploadResult> uploadFile({
-    required File file,
-    required String mimeType,
-    required String fileName,
-    required String channelId,   // numeric, without -100
-    void Function(int sent, int total)? onProgress,
+   required io.File file, // Use io.File here
+   required String mimeType,
+   required String fileName,
+   required String channelId,
+   void Function(int sent, int total)? onProgress,
   }) async {
-    _assertReady();
+   _assertReady();
 
-    final fileSize = await file.length();
-
+  final fileSize = await file.length(); // This will work now!
+  
     // 1. Tell TDLib to upload the file
     final uploadedFile = await _send(td.UploadFile(
       file: td.InputFileLocal(path: file.path),
@@ -238,10 +238,9 @@ class TdlibService {
 
     if (downloaded.local.isDownloadingCompleted) {
       // Copy from TDLib cache to desired save path
-      await File(downloaded.local.path).copy(savePath);
+      await io.File(downloaded.local.path).copy(savePath);
       return savePath;
     }
-
     // Await via update stream if not yet done
     await for (final update in updates) {
       if (update is td.UpdateFile) {

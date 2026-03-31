@@ -1,13 +1,12 @@
 // lib/core/services/tdlib_service.dart
 //
-// Wraps handy_tdlib in a two-isolate architecture as recommended by the README:
-//   • "invokes" isolate  — sends TDLib requests (tdSend)
-//   • "updates" isolate  — receives TDLib updates (tdReceive loop)
+// TDLib now owns ALL authentication:
+//   • QR login  → RequestQrCodeAuthentication + UpdateAuthorizationState
+//   • Phone OTP → SetAuthenticationPhoneNumber + CheckAuthenticationCode
+//   • 2FA       → CheckAuthenticationPassword
+//   • Auth state changes are broadcast via authStateStream
 //
-// Usage (injected via Riverpod in drive_providers.dart):
-//   final tdlib = ref.watch(tdlibServiceProvider);
-//   await tdlib.init(apiId: id, apiHash: hash);
-//   final update = await tdlib.send(SetTdlibParameters(...));
+// File upload / download unchanged — still uses SendMessage + DownloadFile.
 
 import 'dart:async';
 import 'dart:convert';
@@ -19,7 +18,7 @@ import 'package:path_provider/path_provider.dart';
 import '../constants/app_constants.dart';
 
 // ═══════════════════════════════════════════════════════════
-// Data classes
+// Data / result classes
 // ═══════════════════════════════════════════════════════════
 
 class TdlibUploadResult {
@@ -33,17 +32,57 @@ class TdlibUploadResult {
   });
 }
 
+// ═══════════════════════════════════════════════════════════
+// Auth state — mirrors what TDLib reports
+// ═══════════════════════════════════════════════════════════
+
+enum TdlibAuthState {
+  initial,
+  waitingTdlibParams,  // SetTdlibParameters needed
+  waitingPhoneNumber,  // Phone login path
+  waitingCode,         // OTP entry
+  waitingPassword,     // 2FA password
+  waitingQrScan,       // QR login path — waiting for user to scan
+  authenticated,
+  closed,
+  unknown,
+}
+
+// ═══════════════════════════════════════════════════════════
+// QR token
+// ═══════════════════════════════════════════════════════════
+
+class TdlibQrToken {
+  final String link; // tg://login?token=…
+  TdlibQrToken({required this.link});
+}
+
+// ═══════════════════════════════════════════════════════════
+// Exceptions
+// ═══════════════════════════════════════════════════════════
+
 class TdlibException implements Exception {
   final String message;
   final String? code;
   TdlibException(this.message, {this.code});
+
   @override
   String toString() =>
       code != null ? 'TdlibException [$code]: $message' : 'TdlibException: $message';
 }
 
+class TdlibAuthException extends TdlibException {
+  TdlibAuthException(super.message, {super.code});
+}
+
+class TdlibTwoFactorRequired extends TdlibException {
+  final String hint;
+  TdlibTwoFactorRequired({required this.hint})
+      : super('Two-factor authentication required');
+}
+
 // ═══════════════════════════════════════════════════════════
-// Isolate message types
+// Isolate message types (must be top-level / simple)
 // ═══════════════════════════════════════════════════════════
 
 class _InvokeMsg {
@@ -62,55 +101,70 @@ class _UpdateMsg {
 // ═══════════════════════════════════════════════════════════
 
 class TdlibService {
-  // Public update stream — widgets/repos can listen for auth updates, etc.
+  // ── Streams ───────────────────────────────────────────────
   final _updateCtrl = StreamController<td.TdObject>.broadcast();
   Stream<td.TdObject> get updates => _updateCtrl.stream;
 
-  // Pending invoke completers keyed by extra id
+  final _authStateCtrl = StreamController<TdlibAuthState>.broadcast();
+  Stream<TdlibAuthState> get authStateStream => _authStateCtrl.stream;
+
+  // ── State ─────────────────────────────────────────────────
+  TdlibAuthState _authState = TdlibAuthState.initial;
+  TdlibAuthState get authState => _authState;
+  bool get isAuthenticated => _authState == TdlibAuthState.authenticated;
+
+  TdlibQrToken? _currentQrToken;
+  TdlibQrToken? get currentQrToken => _currentQrToken;
+
+  // ── Isolate infra ─────────────────────────────────────────
   final _pending = <int, Completer<td.TdObject>>{};
   int _nextExtra = 1;
-
-  // Isolate infrastructure
   Isolate? _updatesIsolate;
   SendPort? _invokesSendPort;
   bool _ready = false;
-
   int? _clientId;
 
-  // ── Init ─────────────────────────────────────────────────
+  // ── Stored credentials (needed for SetTdlibParameters) ───
+  int? _apiId;
+  String? _apiHash;
+
+  // ─────────────────────────────────────────────────────────
+  // Init
+  // ─────────────────────────────────────────────────────────
 
   Future<void> init({
     required int apiId,
     required String apiHash,
-    required String phone, // pass '' if using QR / already authed
   }) async {
     if (_ready) return;
+
+    _apiId   = apiId;
+    _apiHash = apiHash;
 
     final docsDir = await getApplicationDocumentsDirectory();
     final dbPath  = '${docsDir.path}/${AppConstants.tdlibDbName}';
     await io.Directory(dbPath).create(recursive: true);
 
-    // ── 1. Set up the updates ReceivePort on the main isolate ──
+    // 1. Set up updates ReceivePort on main isolate
     final updatesReceivePort = ReceivePort();
 
-    // ── 2. Spawn the updates isolate ──────────────────────────
+    // 2. Spawn updates isolate
     _updatesIsolate = await Isolate.spawn(
       _updatesLoop,
       updatesReceivePort.sendPort,
     );
 
-    // ── 3. Get client ID from updates isolate ─────────────────
+    // 3. Get clientId + invokesSendPort back from isolate
     final firstMsg = await updatesReceivePort.first as Map<String, dynamic>;
     _clientId = firstMsg['clientId'] as int;
-    final updatesSendPort = firstMsg['invokesSendPort'] as SendPort;
-    _invokesSendPort = updatesSendPort;
+    _invokesSendPort = firstMsg['invokesSendPort'] as SendPort;
 
-    // ── 4. Listen for updates / invoke results ────────────────
+    // 4. Listen for updates and invoke results
     updatesReceivePort.listen((msg) {
       if (msg is! _UpdateMsg) return;
       final obj = msg.object;
 
-      // Route invoke results by extra
+      // Route invoke results by @extra
       // ignore: avoid_dynamic_calls
       final extra = (obj as dynamic).extra as int?;
       if (extra != null && _pending.containsKey(extra)) {
@@ -123,11 +177,16 @@ class TdlibService {
         return;
       }
 
-      // Broadcast real updates
+      // Handle auth state updates
+      if (obj is td.UpdateAuthorizationState) {
+        _handleAuthUpdate(obj.authorizationState);
+      }
+
+      // Broadcast everything else
       _updateCtrl.add(obj);
     });
 
-    // ── 5. Bootstrap TDLib parameters ────────────────────────
+    // 5. Bootstrap TDLib parameters
     await _send(td.SetTdlibParameters(
       useTestDc: false,
       databaseDirectory: dbPath,
@@ -148,55 +207,153 @@ class TdlibService {
     _ready = true;
   }
 
-  // ── Send a TDLib function ─────────────────────────────────
+  // ─────────────────────────────────────────────────────────
+  // Auth state handler
+  // ─────────────────────────────────────────────────────────
 
-  Future<td.TdObject> _send(td.TdFunction fn) {
-    final extra  = _nextExtra++;
-    final json   = fn.toJson()..['@extra'] = extra;
-    final c      = Completer<td.TdObject>();
-    _pending[extra] = c;
-    _invokesSendPort!.send(_InvokeMsg(extra, json));
-    return c.future.timeout(
-      const Duration(seconds: 60),
-      onTimeout: () {
-        _pending.remove(extra);
-        throw TdlibException('Request timed out.', code: 'TIMEOUT');
-      },
-    );
+  void _handleAuthUpdate(td.AuthorizationState state) {
+    if (state is td.AuthorizationStateWaitTdlibParameters) {
+      _setAuthState(TdlibAuthState.waitingTdlibParams);
+
+    } else if (state is td.AuthorizationStateWaitPhoneNumber) {
+      _setAuthState(TdlibAuthState.waitingPhoneNumber);
+
+    } else if (state is td.AuthorizationStateWaitCode) {
+      _setAuthState(TdlibAuthState.waitingCode);
+
+    } else if (state is td.AuthorizationStateWaitPassword) {
+      _setAuthState(TdlibAuthState.waitingPassword);
+
+    } else if (state is td.AuthorizationStateWaitOtherDeviceConfirmation) {
+      // This is the QR login state — state.link is the tg:// URI
+      _currentQrToken = TdlibQrToken(link: state.link);
+      _setAuthState(TdlibAuthState.waitingQrScan);
+
+    } else if (state is td.AuthorizationStateReady) {
+      _setAuthState(TdlibAuthState.authenticated);
+
+    } else if (state is td.AuthorizationStateClosed) {
+      _setAuthState(TdlibAuthState.closed);
+
+    } else {
+      _setAuthState(TdlibAuthState.unknown);
+    }
   }
 
-  // ── Upload a file to a Telegram channel via MTProto ──────
+  void _setAuthState(TdlibAuthState s) {
+    _authState = s;
+    if (!_authStateCtrl.isClosed) _authStateCtrl.add(s);
+  }
 
-  // 1. Change the parameter type to io.File
+  // ─────────────────────────────────────────────────────────
+  // QR Login
+  // ─────────────────────────────────────────────────────────
+
+  /// Starts QR login flow. TDLib will emit
+  /// AuthorizationStateWaitOtherDeviceConfirmation with the tg:// link.
+  /// Listen to [authStateStream] for [TdlibAuthState.waitingQrScan] and
+  /// read [currentQrToken] to get the link.
+  Future<void> requestQrLogin() async {
+    _assertReady();
+    try {
+      await _send(td.RequestQrCodeAuthentication(otherUserIds: []));
+    } on TdlibException catch (e) {
+      // If already in QR wait state TDLib returns an error — ignore it
+      if (e.message.contains('ANOTHER_LOGIN')) return;
+      rethrow;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Phone Login
+  // ─────────────────────────────────────────────────────────
+
+  /// Step 1: send phone number — triggers OTP
+  Future<void> setPhoneNumber(String phoneE164) async {
+    _assertReady();
+    try {
+      await _send(td.SetAuthenticationPhoneNumber(
+        phoneNumber: phoneE164,
+        settings: td.PhoneNumberAuthenticationSettings(
+          allowFlashCall: false,
+          allowMissedCall: false,
+          isCurrentPhoneNumber: false,
+          hasUnknownPhoneNumber: false,
+          allowSmsRetrieverApi: false,
+          firebaseAuthenticationSettings: null,
+          authenticationTokens: [],
+        ),
+      ));
+    } on TdlibException catch (e) {
+      throw TdlibAuthException(e.message, code: e.code);
+    }
+  }
+
+  /// Step 2: verify OTP code
+  Future<void> checkCode(String code) async {
+    _assertReady();
+    try {
+      await _send(td.CheckAuthenticationCode(code: code));
+    } on TdlibException catch (e) {
+      if (e.message.contains('PASSWORD_NEEDED') ||
+          e.code == '401') {
+        throw TdlibTwoFactorRequired(hint: '');
+      }
+      throw TdlibAuthException(e.message, code: e.code);
+    }
+  }
+
+  /// Step 3 (optional): verify 2FA password
+  Future<void> checkPassword(String password) async {
+    _assertReady();
+    try {
+      await _send(td.CheckAuthenticationPassword(password: password));
+    } on TdlibException catch (e) {
+      throw TdlibAuthException(e.message, code: e.code);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Sign out
+  // ─────────────────────────────────────────────────────────
+
+  Future<void> signOut() async {
+    if (!_ready) return;
+    try {
+      await _send(td.LogOut());
+    } catch (_) {}
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // File ops
+  // ─────────────────────────────────────────────────────────
+
   Future<TdlibUploadResult> uploadFile({
-   required io.File file, // Use io.File here
-   required String mimeType,
-   required String fileName,
-   required String channelId,
-   void Function(int sent, int total)? onProgress,
+    required io.File file,
+    required String mimeType,
+    required String fileName,
+    required String channelId,
+    void Function(int sent, int total)? onProgress,
   }) async {
-   _assertReady();
+    _assertReady();
 
-  final fileSize = await file.length(); // This will work now!
-  
-    // 1. Tell TDLib to upload the file
+    final fileSize = await file.length();
+
+    // 1. Preliminary upload
     final uploadedFile = await _send(td.PreliminaryUploadFile(
       file: td.InputFileLocal(path: file.path),
       fileType: _fileTypeFromMime(mimeType),
       priority: 1,
     )) as td.File;
 
-    // 2. Wait for upload completion, streaming progress
     final fileId = uploadedFile.id;
     await _waitForFileUpload(fileId, fileSize, onProgress);
 
-    // 3. Send as message to the channel
-    final chatId = int.parse(channelId.replaceAll(RegExp(r'^-100'), ''));
-    // Prepend -100 for supergroups/channels
-    final tgChatId = -1 * (100 * 1000000000 + chatId);
+    // 2. Send as message to channel
+    final chatId = _normaliseChatId(channelId);
 
     final message = await _send(td.SendMessage(
-      chatId: tgChatId,
+      chatId: chatId,
       messageThreadId: 0,
       replyTo: null,
       options: null,
@@ -216,8 +373,6 @@ class TdlibService {
     );
   }
 
-  // ── Download a file ───────────────────────────────────────
-
   Future<String> downloadFile({
     required String fileId,
     required String savePath,
@@ -232,23 +387,20 @@ class TdlibService {
       priority: 1,
       offset: 0,
       limit: 0,
-      synchronous: true, // wait until complete
+      synchronous: true,
     )) as td.File;
 
     if (downloaded.local.isDownloadingCompleted) {
-      // FIX 1: Use io.File instead of File
       await io.File(downloaded.local.path).copy(savePath);
       return savePath;
     }
 
-    // Await via update stream if not yet done
     await for (final update in updates) {
       if (update is td.UpdateFile) {
         final f = update.file;
         if (f.id == id) {
           onProgress?.call(f.local.downloadedSize, f.expectedSize ?? 0);
           if (f.local.isDownloadingCompleted) {
-            // FIX 2: Use io.File here as well
             await io.File(f.local.path).copy(savePath);
             return savePath;
           }
@@ -258,19 +410,41 @@ class TdlibService {
     throw TdlibException('Download failed', code: 'DOWNLOAD_FAILED');
   }
 
-  // ── Dispose ───────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────
+  // Dispose
+  // ─────────────────────────────────────────────────────────
 
   Future<void> dispose() async {
     _updatesIsolate?.kill(priority: Isolate.immediate);
     await _updateCtrl.close();
+    await _authStateCtrl.close();
     _pending.clear();
     _ready = false;
   }
 
-  // ── Helpers ───────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────
+  // Internal helpers
+  // ─────────────────────────────────────────────────────────
 
   void _assertReady() {
-    if (!_ready) throw TdlibException('TdlibService not initialised.', code: 'NOT_READY');
+    if (!_ready) {
+      throw TdlibException('TdlibService not initialised.', code: 'NOT_READY');
+    }
+  }
+
+  Future<td.TdObject> _send(td.TdFunction fn) {
+    final extra = _nextExtra++;
+    final json  = fn.toJson()..['@extra'] = extra;
+    final c     = Completer<td.TdObject>();
+    _pending[extra] = c;
+    _invokesSendPort!.send(_InvokeMsg(extra, json));
+    return c.future.timeout(
+      const Duration(seconds: 60),
+      onTimeout: () {
+        _pending.remove(extra);
+        throw TdlibException('Request timed out.', code: 'TIMEOUT');
+      },
+    );
   }
 
   Future<void> _waitForFileUpload(
@@ -295,37 +469,40 @@ class TdlibService {
     if (mime.startsWith('audio/')) return td.FileTypeAudio();
     return td.FileTypeDocument();
   }
+
+  /// Converts a channel ID string like "-1001234567890" or "1234567890"
+  /// into the int64 chat ID TDLib expects.
+  int _normaliseChatId(String channelId) {
+    final raw = channelId.trim();
+    if (raw.startsWith('-')) return int.parse(raw);
+    // bare numeric → supergroup/channel format
+    final n = int.parse(raw.replaceAll(RegExp(r'^-?100'), ''));
+    return -1000000000000 - n; // -100<id>
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
-// Updates isolate entry point (top-level function required)
+// Updates isolate entry point (must be top-level)
 // ═══════════════════════════════════════════════════════════
 
 void _updatesLoop(SendPort mainSendPort) {
-  // Create the TDLib client
   final clientId = TdPlugin.instance.tdCreateClientId();
 
-  // Set up a ReceivePort so main isolate can send invokes to us
   final invokesReceivePort = ReceivePort();
 
-  // Send back the client ID and our SendPort
   mainSendPort.send({
     'clientId': clientId,
     'invokesSendPort': invokesReceivePort.sendPort,
   });
 
-  // Handle incoming invoke requests
   invokesReceivePort.listen((msg) {
     if (msg is _InvokeMsg) {
       TdPlugin.instance.tdSend(clientId, jsonEncode(msg.json));
     }
   });
 
-  // Receive loop — this runs forever on this isolate
   while (true) {
-    // FIX 4: Ensure clientId is passed as the correct type.
-    // If your error said 'int' can't be assigned to 'double', use .toDouble()
-    final response = TdPlugin.instance.tdReceive(clientId.toDouble()); 
+    final response = TdPlugin.instance.tdReceive(clientId.toDouble());
     if (response != null) {
       try {
         final obj = convertJsonToObject(response);

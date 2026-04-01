@@ -159,6 +159,10 @@ class TdlibService {
     _clientId = firstMsg['clientId'] as int;
     _invokesSendPort = firstMsg['invokesSendPort'] as SendPort;
 
+    // 4. Completer that resolves once TDLib emits a meaningful auth state
+    //    (anything past WaitTdlibParameters), proving the native layer is live.
+    final tdlibBootCompleter = Completer<void>();
+
     // 4. Listen for updates and invoke results
     updatesReceivePort.listen((msg) {
       if (msg is! _UpdateMsg) return;
@@ -180,6 +184,14 @@ class TdlibService {
       // Handle auth state updates
       if (obj is td.UpdateAuthorizationState) {
         _handleAuthUpdate(obj.authorizationState);
+
+        // Signal that TDLib has bootstrapped past the parameters step.
+        // WaitTdlibParameters means we still need to send params; any state
+        // after that means TDLib is alive and ready for commands.
+        if (!tdlibBootCompleter.isCompleted &&
+            obj.authorizationState is! td.AuthorizationStateWaitTdlibParameters) {
+          tdlibBootCompleter.complete();
+        }
       }
 
       // Broadcast everything else
@@ -203,6 +215,20 @@ class TdlibService {
       systemVersion: 'Android',
       applicationVersion: AppConstants.appVersion,
     ));
+
+    // 6. Wait until TDLib confirms it has moved past the params stage.
+    //    Without this wait, calls like setPhoneNumber / requestQrLogin arrive
+    //    before TDLib is ready, causing NOT_READY / QR_TOKEN_NULL errors.
+    await tdlibBootCompleter.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        throw TdlibException(
+          'TDLib did not become ready within 30 seconds. '
+          'Check your API ID / Hash and internet connection.',
+          code: 'BOOT_TIMEOUT',
+        );
+      },
+    );
 
     _ready = true;
   }

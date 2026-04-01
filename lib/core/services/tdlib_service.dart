@@ -528,7 +528,7 @@ void _updatesLoop(SendPort mainSendPort) {
   });
 
   while (true) {
-    final response = TdPlugin.instance.tdReceive(clientId.toDouble());
+    final response = TdPlugin.instance.tdReceive(clientId.toDouble(), 0.1);
     if (response != null) {
       try {
         final obj = convertJsonToObject(response);

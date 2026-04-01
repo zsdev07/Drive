@@ -85,13 +85,16 @@ class MtprotoService {
                   accessibility: KeychainAccessibility.first_unlock),
             );
 
+  // ── Internal stream controller for auth state ─────────────
+  // This allows callers to subscribe before _tdlib is initialised.
+  final _authStateCtrl = StreamController<TdlibAuthState>.broadcast();
+
   // ── Public state ──────────────────────────────────────────
 
   TdlibAuthState get authState =>
       _tdlib?.authState ?? TdlibAuthState.initial;
 
-  Stream<TdlibAuthState> get authStateStream =>
-      _tdlib?.authStateStream ?? const Stream.empty();
+  Stream<TdlibAuthState> get authStateStream => _authStateCtrl.stream;
 
   bool get isAuthenticated =>
       _tdlib?.isAuthenticated ?? false;
@@ -137,9 +140,14 @@ class MtprotoService {
     _tdlib = TdlibService();
     await _tdlib!.init(apiId: apiId, apiHash: hash);
 
-    // Persist session key when TDLib reaches authenticated state
+    // Forward all TDLib auth state changes through our broadcast controller
+    // so callers who subscribed before _tdlib existed still get updates.
     _tdlib!.authStateStream.listen((state) async {
+      // Broadcast to our own controller first
+      if (!_authStateCtrl.isClosed) _authStateCtrl.add(state);
+
       if (state == TdlibAuthState.authenticated) {
+        // Persist session key when authenticated
         await _secure.write(
           key: AppConstants.secureKeyAuthKey,
           value: jsonEncode({
@@ -193,15 +201,31 @@ class MtprotoService {
   /// TDLib fires [TdlibAuthState.waitingQrScan] with [currentQrToken] set.
   Future<TdlibQrToken> startQrLogin() async {
     final tdlib = await _ensureTdlib();
+
+    // Set up the stream listener BEFORE requesting QR login to avoid missing
+    // the state update that arrives immediately after the request.
+    // Use the TdlibService stream directly — _tdlib is guaranteed non-null here.
+    final stateStream = tdlib.authStateStream.asBroadcastStream();
+
+    // If TDLib is already in waitingQrScan state (e.g. after a refresh),
+    // return the cached token immediately without sending another request.
+    if (tdlib.authState == TdlibAuthState.waitingQrScan &&
+        tdlib.currentQrToken != null) {
+      return tdlib.currentQrToken!;
+    }
+
+    // Subscribe first, then send the request — eliminates the race window.
+    final stateFuture = stateStream
+        .where((s) => s == TdlibAuthState.waitingQrScan)
+        .timeout(const Duration(seconds: 20))
+        .first;
+
     await tdlib.requestQrLogin();
 
-    // Wait for TDLib to emit the QR link (up to 15 seconds)
-    final token = await authStateStream
-        .where((s) => s == TdlibAuthState.waitingQrScan)
-        .timeout(const Duration(seconds: 15))
-        .first
-        .then((_) => currentQrToken);
+    // Wait for TDLib to emit the QR link
+    await stateFuture;
 
+    final token = tdlib.currentQrToken;
     if (token == null) {
       throw MtprotoException('Failed to obtain QR token from TDLib.',
           code: 'QR_TOKEN_NULL');
@@ -257,6 +281,8 @@ class MtprotoService {
     _tdlibChannelId = null;
     await _clearSession();
     await _db.clearAllSessions();
+    // Emit closed state so listeners know the session ended
+    if (!_authStateCtrl.isClosed) _authStateCtrl.add(TdlibAuthState.closed);
   }
 
   // ══════════════════════════════════════════════════════════
@@ -322,6 +348,7 @@ class MtprotoService {
 
   Future<void> dispose() async {
     await _tdlib?.dispose();
+    if (!_authStateCtrl.isClosed) await _authStateCtrl.close();
   }
 
   // ── Internal ──────────────────────────────────────────────

@@ -59,12 +59,17 @@ class _AccountPageState extends State<AccountPage>
             phone: _phone,
             initials: _initials,
             onDisconnect: () async {
+             // ← ADD THIS: actually sign out of TDLib
+              final service = await ref.read(mtprotoServiceProvider.future);
+              await service.signOut();
+
               final prefs = await SharedPreferences.getInstance();
               await prefs.remove(AppConstants.keyMtprotoConnected);
               await prefs.remove(AppConstants.keyMtprotoName);
               await prefs.remove(AppConstants.keyMtprotoPhone);
               await prefs.remove(AppConstants.keyMtprotoAvatar);
-              if (mounted) setState(() => _isConnected = false);
+              await prefs.setBool(AppConstants.keyIsLoggedIn, false); // ← also clear login flag
+              if (mounted) context.go('/login');                      // ← navigate back to login
             },
           )
         : _buildUpsellPage();

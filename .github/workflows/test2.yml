@@ -1,0 +1,153 @@
+name: ZX Drive — Build + TDLib Diagnostic
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  build-and-diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # 1. Checkout
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. Java Setup
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 3. Flutter Setup
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.0'  # Pin version for reproducibility
+
+      # 4. Install Dependencies
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Run Build Runner
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      # 5. 🔍 Pre-Build Diagnostic: Check if jniLibs exist in repo
+      - name: Check for TDLib Native Libraries in Repo
+        id: check_natives
+        run: |
+          echo "🔍 Checking android/app/src/main/jniLibs/..."
+          if [ -d "android/app/src/main/jniLibs" ]; then
+            echo "✅ jniLibs folder exists"
+            find android/app/src/main/jniLibs -name "libtdjson.so" -type f || echo "⚠️ No libtdjson.so found in jniLibs"
+          else
+            echo "❌ jniLibs folder NOT found — TDLib natives may be missing!"
+            echo "has_natives=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 6. Build APK (debug for faster iteration)
+      - name: Build Debug APK
+        run: flutter build apk --debug --verbose
+
+      # 7. 🔍 Post-Build Diagnostic: Inspect APK for native libs
+      - name: Verify TDLib Natives in APK
+        id: verify_apk
+        run: |
+          APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"
+          
+          if [ ! -f "$APK_PATH" ]; then
+            echo "❌ APK not found at $APK_PATH"
+            exit 1
+          fi
+          
+          echo "📦 Inspecting APK for libtdjson.so..."
+          echo ""
+          echo "=== Native Library Check ==="
+          
+          # Check each ABI
+          for abi in arm64-v8a armeabi-v7a x86_86; do
+            if unzip -l "$APK_PATH" | grep -q "lib/$abi/libtdjson.so"; then
+              echo "✅ lib/$abi/libtdjson.so — FOUND"
+            else
+              echo "❌ lib/$abi/libtdjson.so — MISSING"
+            fi
+          done
+          
+          echo ""
+          echo "=== Full Native Libs List ==="
+          unzip -l "$APK_PATH" | grep "lib/.*/lib.*\.so" | head -20 || echo "⚠️ No .so files found at all"
+          
+          # Count TDLib libs
+          TD_COUNT=$(unzip -l "$APK_PATH" | grep -c "libtdjson.so" || true)
+          echo "tdlib_count=$TD_COUNT" >> $GITHUB_OUTPUT
+          
+          if [ "$TD_COUNT" -eq 0 ]; then
+            echo ""
+            echo "🚨 CRITICAL: No libtdjson.so found in APK!"
+            echo "💡 This will cause 401/NOT_READY errors at runtime."
+            echo "🔧 Fix: Ensure jniLibs/ contains pre-built TDLib .so files."
+            exit 1  # Fail the build if natives are missing
+          fi
+
+      # 8. 🔍 Optional: Extract & Validate TDLib Version (if readelf available)
+      - name: Validate TDLib Binary (Optional)
+        if: steps.verify_apk.outputs.tdlib_count > 0
+        run: |
+          echo "🔧 Attempting to extract and inspect libtdjson.so..."
+          mkdir -p /tmp/tdlib_check
+          unzip -j build/app/outputs/flutter-apk/app-debug.apk "lib/arm64-v8a/libtdjson.so" -d /tmp/tdlib_check || true
+          
+          if [ -f "/tmp/tdlib_check/libtdjson.so" ]; then
+            echo "✅ Extracted libtdjson.so for arm64-v8a"
+            # Try to read version string (may not work on stripped binaries)
+            strings /tmp/tdlib_check/libtdjson.so | grep -i "tdlib\|version" | head -5 || echo "⚠️ Could not extract version info (binary may be stripped)"
+          else
+            echo "⚠️ Could not extract libtdjson.so for inspection"
+          fi
+
+      # 9. Upload APK + Diagnostic Report
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zx-drive-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 7
+
+      - name: Upload Diagnostic Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zx-drive-diagnostic-log
+          path: |
+            build/app/outputs/logs/
+            *.log
+          retention-days: 3
+
+      # 10. 📋 Final Summary
+      - name: Print Diagnostic Summary
+        run: |
+          echo ""
+          echo "╔════════════════════════════════════════╗"
+          echo "║   ZX Drive — TDLib Diagnostic Summary  ║"
+          echo "╚════════════════════════════════════════╝"
+          echo ""
+          echo "✅ Build: SUCCESS"
+          echo "✅ APK Size: $(du -h build/app/outputs/flutter-apk/app-debug.apk | cut -f1)"
+          echo "✅ TDLib .so files in APK: ${{ steps.verify_apk.outputs.tdlib_count }}"
+          echo ""
+          if [ "${{ steps.verify_apk.outputs.tdlib_count }}" -gt 0 ]; then
+            echo "🎉 Native libraries are packaged correctly!"
+            echo "📱 Next: Install the APK on your device and watch logcat for:"
+            echo "   • 'TDLib version: 1.8.x'"
+            echo "   • 'authorizationStateWaitPhoneNumber'"
+            echo ""
+            echo "🔧 If you still see 401 errors, check:"
+            echo "   • API ID/Hash are correct and from my.telegram.org"
+            echo "   • Old session files aren't conflicting (clear app data)"
+            echo "   • Network allows MTProto connections (try Wi‑Fi vs mobile data)"
+          else
+            echo "🚨 Native libraries MISSING — fix jniLibs/ first!"
+          fi
+          echo ""

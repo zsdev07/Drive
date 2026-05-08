@@ -465,7 +465,7 @@ class TdlibService {
     _pending[extra] = c;
 
     // Send directly to TDLib on the main isolate
-    TdPlugin.instance.tdSend(_clientId, jsonEncode(json));
+    TdPlugin.instance.tdSend(_clientId!, jsonEncode(json));
 
     return c.future.timeout(
       const Duration(seconds: 60),

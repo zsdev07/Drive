@@ -7,12 +7,13 @@
 //   • Auth state changes are broadcast via authStateStream
 //
 // File upload / download unchanged — still uses SendMessage + DownloadFile.
+//
+// PATCH: Removed spawned isolate to fix LateInitializationError on TdPlugin.instance.
+// TDLib now runs entirely on the main isolate where Flutter plugins are registered.
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
 import 'dart:io' as io;
-import 'dart:io' show sleep;
 import 'package:handy_tdlib/api.dart' as td;
 import 'package:handy_tdlib/handy_tdlib.dart';
 import 'package:path_provider/path_provider.dart';
@@ -83,21 +84,6 @@ class TdlibTwoFactorRequired extends TdlibException {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Isolate message types (must be top-level / simple)
-// ═══════════════════════════════════════════════════════════
-
-class _InvokeMsg {
-  final int extra;
-  final Map<String, dynamic> json;
-  const _InvokeMsg(this.extra, this.json);
-}
-
-class _UpdateMsg {
-  final td.TdObject object;
-  const _UpdateMsg(this.object);
-}
-
-// ═══════════════════════════════════════════════════════════
 // TdlibService
 // ═══════════════════════════════════════════════════════════
 
@@ -117,13 +103,12 @@ class TdlibService {
   TdlibQrToken? _currentQrToken;
   TdlibQrToken? get currentQrToken => _currentQrToken;
 
-  // ── Isolate infra ─────────────────────────────────────────
+  // ── Main isolate infra (No spawned isolate) ──────────────
   final _pending = <int, Completer<td.TdObject>>{};
   int _nextExtra = 1;
-  Isolate? _updatesIsolate;
-  SendPort? _invokesSendPort;
   bool _ready = false;
   int? _clientId;
+  bool _updateLoopRunning = false;
 
   // ── Stored credentials (needed for SetTdlibParameters) ───
   int? _apiId;
@@ -146,57 +131,21 @@ class TdlibService {
     final dbPath  = '${docsDir.path}/${AppConstants.tdlibDbName}';
     await io.Directory(dbPath).create(recursive: true);
 
-    // 1. Set up updates ReceivePort on main isolate
-    final updatesReceivePort = ReceivePort();
+    // 1. Create client directly on the main isolate (where TdPlugin is registered)
+    _clientId = TdPlugin.instance.tdCreateClientId();
 
-    // 2. Spawn updates isolate
-    _updatesIsolate = await Isolate.spawn(
-      _updatesLoop,
-      updatesReceivePort.sendPort,
-    );
+    // 2. Start the update loop on the main isolate
+    _startUpdateLoop();
 
-    // 3. Get clientId + invokesSendPort back from isolate
-    final firstMsg = await updatesReceivePort.first as Map<String, dynamic>;
-    _clientId = firstMsg['clientId'] as int;
-    _invokesSendPort = firstMsg['invokesSendPort'] as SendPort;
-
-    // 4. Completer that resolves once TDLib emits a meaningful auth state
+    // 3. Completer that resolves once TDLib emits a meaningful auth state
     //    (anything past WaitTdlibParameters), proving the native layer is live.
     final tdlibBootCompleter = Completer<void>();
 
-    // 5. Listen for updates and invoke results
-    updatesReceivePort.listen((msg) {
-      if (msg is! _UpdateMsg) return;
-      final obj = msg.object;
-
-      // Route invoke results by @extra
-      // ignore: avoid_dynamic_calls
-      final extra = (obj as dynamic).extra as int?;
-      if (extra != null && _pending.containsKey(extra)) {
-        final c = _pending.remove(extra)!;
-        if (obj is td.TdError) {
-          c.completeError(TdlibException(obj.message, code: '${obj.code}'));
-        } else {
-          c.complete(obj);
-        }
-        return;
+    // 4. Listen for auth state updates to resolve boot completer
+    authStateStream.listen((state) {
+      if (!tdlibBootCompleter.isCompleted && state != TdlibAuthState.waitingTdlibParams) {
+        tdlibBootCompleter.complete();
       }
-
-      // Handle auth state updates
-      if (obj is td.UpdateAuthorizationState) {
-        _handleAuthUpdate(obj.authorizationState);
-
-        // Signal that TDLib has bootstrapped past the parameters step.
-        // WaitTdlibParameters means we still need to send params; any state
-        // after that means TDLib is alive and ready for commands.
-        if (!tdlibBootCompleter.isCompleted &&
-            obj.authorizationState is! td.AuthorizationStateWaitTdlibParameters) {
-          tdlibBootCompleter.complete();
-        }
-      }
-
-      // Broadcast everything else
-      _updateCtrl.add(obj);
     });
 
     // 5. Bootstrap TDLib parameters
@@ -218,8 +167,6 @@ class TdlibService {
     ));
 
     // 6. Wait until TDLib confirms it has moved past the params stage.
-    //    Without this wait, calls like setPhoneNumber / requestQrLogin arrive
-    //    before TDLib is ready, causing NOT_READY / QR_TOKEN_NULL errors.
     await tdlibBootCompleter.future.timeout(
       const Duration(seconds: 30),
       onTimeout: () {
@@ -232,6 +179,59 @@ class TdlibService {
     );
 
     _ready = true;
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Update loop (replaces isolate loop)
+  // ─────────────────────────────────────────────────────────
+
+  void _startUpdateLoop() {
+    if (_updateLoopRunning) return;
+    _updateLoopRunning = true;
+
+    Future<void> poll() async {
+      while (_ready && _clientId != null) {
+        try {
+          final response = TdPlugin.instance.tdReceive(_clientId!.toDouble());
+          if (response != null) {
+            try {
+              final obj = convertJsonToObject(response);
+              if (obj != null) _handleIncoming(obj);
+            } catch (_) {}
+          } else {
+            // Yield to event loop when no data is available
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
+        } catch (_) {
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      }
+      _updateLoopRunning = false;
+    }
+    poll();
+  }
+
+  void _handleIncoming(td.TdObject obj) {
+    // Route invoke results by @extra
+    // ignore: avoid_dynamic_calls
+    final extra = (obj as dynamic).extra as int?;
+    if (extra != null && _pending.containsKey(extra)) {
+      final c = _pending.remove(extra)!;
+      if (obj is td.TdError) {
+        c.completeError(TdlibException(obj.message, code: '${obj.code}'));
+      } else {
+        c.complete(obj);
+      }
+      return;
+    }
+
+    // Handle auth state updates
+    if (obj is td.UpdateAuthorizationState) {
+      _handleAuthUpdate(obj.authorizationState);
+    }
+
+    // Broadcast all updates
+    if (!_updateCtrl.isClosed) _updateCtrl.add(obj);
   }
 
   // ─────────────────────────────────────────────────────────
@@ -442,11 +442,10 @@ class TdlibService {
   // ─────────────────────────────────────────────────────────
 
   Future<void> dispose() async {
-    _updatesIsolate?.kill(priority: Isolate.immediate);
+    _ready = false;
     await _updateCtrl.close();
     await _authStateCtrl.close();
     _pending.clear();
-    _ready = false;
   }
 
   // ─────────────────────────────────────────────────────────
@@ -464,7 +463,10 @@ class TdlibService {
     final json  = fn.toJson()..['@extra'] = extra;
     final c     = Completer<td.TdObject>();
     _pending[extra] = c;
-    _invokesSendPort!.send(_InvokeMsg(extra, json));
+
+    // Send directly to TDLib on the main isolate
+    TdPlugin.instance.tdSend(_clientId, jsonEncode(json));
+
     return c.future.timeout(
       const Duration(seconds: 60),
       onTimeout: () {
@@ -505,40 +507,5 @@ class TdlibService {
     // bare numeric → supergroup/channel format
     final n = int.parse(raw.replaceAll(RegExp(r'^-?100'), ''));
     return -1000000000000 - n; // -100<id>
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// Updates isolate entry point (must be top-level)
-// ═══════════════════════════════════════════════════════════
-
-void _updatesLoop(SendPort mainSendPort) {
-  final clientId = TdPlugin.instance.tdCreateClientId();
-
-  final invokesReceivePort = ReceivePort();
-
-  mainSendPort.send({
-    'clientId': clientId,
-    'invokesSendPort': invokesReceivePort.sendPort,
-  });
-
-  invokesReceivePort.listen((msg) {
-    if (msg is _InvokeMsg) {
-      TdPlugin.instance.tdSend(clientId, jsonEncode(msg.json));
-    }
-  });
-
-  while (true) {
-    final response = TdPlugin.instance.tdReceive(clientId.toDouble());
-    if (response != null) {
-      try {
-        final obj = convertJsonToObject(response);
-        if (obj != null) mainSendPort.send(_UpdateMsg(obj));
-      } catch (_) {}
-    } else {
-      // No data available — yield briefly to avoid pinning the CPU at 100%.
-      // sleep() is safe here because this is a dedicated isolate.
-      sleep(const Duration(milliseconds: 10));
-    }
   }
 }

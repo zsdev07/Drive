@@ -62,78 +62,31 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
   // ── Start QR login flow ───────────────────────────────────
 
   Future<void> _startFlow() async {
-    if (!mounted) return;
-    setState(() {
-      _isStarting = true;
-      _error      = null;
-      _token      = null;
+  if (!mounted) return;
+  setState(() => _isStarting = true);
+
+  try {
+    final service = await ref.read(mtprotoServiceProvider.future);
+
+    // FORCE initialization
+    if (!service.isAuthenticated) {
+      await service.startQrLogin();   // This now properly waits inside MtprotoService
+    }
+
+    // Listen for state
+    _authSub = service.authStateStream.listen((state) {
+      if (state == MtprotoAuthState.waitingQrScan) {
+        setState(() => _token = service.currentQrToken);
+      } else if (state == MtprotoAuthState.authenticated) {
+        Navigator.of(context).pop({...});
+      }
     });
 
-    try {
-      final service = await ref.read(mtprotoServiceProvider.future);
-
-      // Cancel old subscription before starting fresh
-      await _authSub?.cancel();
-
-      // Listen for auth state changes from TdlibService
-      _authSub = service.authStateStream.listen((state) {
-        if (!mounted) return;
-
-        if (state == MtprotoAuthState.authenticated) {
-          _authSub?.cancel();
-          Navigator.of(context).pop(<String, String>{
-            'name':     'Telegram User',
-            'phone':    '',
-            'initials': 'TU',
-          });
-          return;
-        }
-
-        if (state == MtprotoAuthState.waitingQrScan) {
-          // TDLib has provided a fresh QR link
-          setState(() => _token = service.currentQrToken);
-        }
-      });
-
-      // Request QR login from TDLib (not api.telegram.org!)
-      // startQrLogin() calls TdlibService.requestQrLogin() which sends
-      // RequestQrCodeAuthentication to TDLib via the native .so — correct!
-      final token = await service.startQrLogin();
-
-      if (mounted) {
-        setState(() {
-          _token     = token;
-          _isStarting = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isStarting = false;
-          _error      = _friendlyError(e);
-        });
-      }
-    }
-  }
-
-  String _friendlyError(Object e) {
-    final msg = e.toString();
-    if (msg.contains('MISSING_CREDENTIALS')) {
-      return 'API credentials not set. Go back and enter your API ID and Hash first.';
-    }
-    if (msg.contains('SocketException') || msg.contains('Connection refused')) {
-      return 'Cannot reach Telegram servers. Check your internet connection.';
-    }
-    if (msg.contains('TimeoutException') || msg.contains('timed out')) {
-      return 'Connection timed out. Check your internet and try again.';
-    }
-    if (msg.contains('NOT_READY') || msg.contains('QR_TOKEN_NULL')) {
-      return 'Could not start QR login. Make sure your API ID and Hash are correct.';
-    }
-    return msg
-        .replaceFirst('TdlibException: ', '')
-        .replaceFirst('MtprotoException: ', '')
-        .replaceFirst('Exception: ', '');
+  } catch (e) {
+    setState(() => _error = _friendlyError(e));
+  } finally {
+    if (mounted) setState(() => _isStarting = false);
+   }
   }
 
   // ── Build ─────────────────────────────────────────────────

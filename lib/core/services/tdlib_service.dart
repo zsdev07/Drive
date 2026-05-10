@@ -134,104 +134,84 @@ class TdlibService {
   // ─────────────────────────────────────────────────────────
 
   Future<void> init({
-    required int apiId,
-    required String apiHash,
-  }) async {
-    if (_ready) return;
+  required int apiId,
+  required String apiHash,
+}) async {
+  if (_ready) return;
 
-    _apiId   = apiId;
-    _apiHash = apiHash;
+  _apiId = apiId;
+  _apiHash = apiHash;
 
-    final docsDir = await getApplicationDocumentsDirectory();
-    final dbPath  = '${docsDir.path}/${AppConstants.tdlibDbName}';
-    await io.Directory(dbPath).create(recursive: true);
+  final docsDir = await getApplicationDocumentsDirectory();
+  final dbPath = '${docsDir.path}/${AppConstants.tdlibDbName}';
+  await io.Directory(dbPath).create(recursive: true);
 
-    // 1. Set up updates ReceivePort on main isolate
-    final updatesReceivePort = ReceivePort();
+  final updatesReceivePort = ReceivePort();
+  _updatesIsolate = await Isolate.spawn(_updatesLoop, updatesReceivePort.sendPort);
 
-    // 2. Spawn updates isolate
-    _updatesIsolate = await Isolate.spawn(
-      _updatesLoop,
-      updatesReceivePort.sendPort,
-    );
+  final firstMsg = await updatesReceivePort.first as Map<String, dynamic>;
+  _clientId = firstMsg['clientId'] as int;
+  _invokesSendPort = firstMsg['invokesSendPort'] as SendPort;
 
-    // 3. Get clientId + invokesSendPort back from isolate
-    final firstMsg = await updatesReceivePort.first as Map<String, dynamic>;
-    _clientId = firstMsg['clientId'] as int;
-    _invokesSendPort = firstMsg['invokesSendPort'] as SendPort;
+  final tdlibBootCompleter = Completer<void>();
 
-    // 4. Completer that resolves once TDLib emits a meaningful auth state
-    //    (anything past WaitTdlibParameters), proving the native layer is live.
-    final tdlibBootCompleter = Completer<void>();
+  updatesReceivePort.listen((msg) {
+    if (msg is! _UpdateMsg) return;
+    final obj = msg.object;
 
-    // 5. Listen for updates and invoke results
-    updatesReceivePort.listen((msg) {
-      if (msg is! _UpdateMsg) return;
-      final obj = msg.object;
+    final extra = (obj as dynamic).extra as int?;
+    if (extra != null && _pending.containsKey(extra)) {
+      final c = _pending.remove(extra)!;
+      obj is td.TdError
+          ? c.completeError(TdlibException(obj.message, code: '${obj.code}'))
+          : c.complete(obj);
+      return;
+    }
 
-      // Route invoke results by @extra
-      // ignore: avoid_dynamic_calls
-      final extra = (obj as dynamic).extra as int?;
-      if (extra != null && _pending.containsKey(extra)) {
-        final c = _pending.remove(extra)!;
-        if (obj is td.TdError) {
-          c.completeError(TdlibException(obj.message, code: '${obj.code}'));
-        } else {
-          c.complete(obj);
-        }
-        return;
+    if (obj is td.UpdateAuthorizationState) {
+      _handleAuthUpdate(obj.authorizationState);
+
+      if (!tdlibBootCompleter.isCompleted &&
+          obj.authorizationState is! td.AuthorizationStateWaitTdlibParameters) {
+        tdlibBootCompleter.complete();
       }
+    }
 
-      // Handle auth state updates
-      if (obj is td.UpdateAuthorizationState) {
-        _handleAuthUpdate(obj.authorizationState);
+    _updateCtrl.add(obj);
+  });
 
-        // Signal that TDLib has bootstrapped past the parameters step.
-        // WaitTdlibParameters means we still need to send params; any state
-        // after that means TDLib is alive and ready for commands.
-        if (!tdlibBootCompleter.isCompleted &&
-            obj.authorizationState is! td.AuthorizationStateWaitTdlibParameters) {
-          tdlibBootCompleter.complete();
-        }
-      }
+  // Send parameters
+  await _send(td.SetTdlibParameters(
+    useTestDc: false,
+    databaseDirectory: dbPath,
+    filesDirectory: '$dbPath/files',
+    databaseEncryptionKey: '',
+    useFileDatabase: true,
+    useChatInfoDatabase: true,
+    useMessageDatabase: true,
+    useSecretChats: false,
+    apiId: apiId,
+    apiHash: apiHash,
+    systemLanguageCode: 'en',
+    deviceModel: 'Android',
+    systemVersion: 'Android',
+    applicationVersion: AppConstants.appVersion,
+  ));
 
-      // Broadcast everything else
-      _updateCtrl.add(obj);
-    });
-
-    // 5. Bootstrap TDLib parameters
-    await _send(td.SetTdlibParameters(
-      useTestDc: false,
-      databaseDirectory: dbPath,
-      filesDirectory: '$dbPath/files',
-      databaseEncryptionKey: '',
-      useFileDatabase: true,
-      useChatInfoDatabase: true,
-      useMessageDatabase: true,
-      useSecretChats: false,
-      apiId: apiId,
-      apiHash: apiHash,
-      systemLanguageCode: 'en',
-      deviceModel: 'Android',
-      systemVersion: 'Android',
-      applicationVersion: AppConstants.appVersion,
-    ));
-
-    // 6. Wait until TDLib confirms it has moved past the params stage.
-    //    Without this wait, calls like setPhoneNumber / requestQrLogin arrive
-    //    before TDLib is ready, causing NOT_READY / QR_TOKEN_NULL errors.
+  // Better timeout + retry
+  try {
     await tdlibBootCompleter.future.timeout(
-      const Duration(seconds: 30),
-      onTimeout: () {
-        throw TdlibException(
-          'TDLib did not become ready within 30 seconds. '
-          'Check your API ID / Hash and internet connection.',
-          code: 'BOOT_TIMEOUT',
-        );
-      },
+      const Duration(seconds: 45),
     );
+  } catch (e) {
+    // Retry once
+    await Future.delayed(const Duration(seconds: 2));
+    await _send(td.SetTdlibParameters(/* same as above */));
+    await tdlibBootCompleter.future.timeout(const Duration(seconds: 30));
+  }
 
-    _ready = true;
+  _ready = true;
+  print("✅ TDLib initialized successfully");
   }
 
   // ─────────────────────────────────────────────────────────

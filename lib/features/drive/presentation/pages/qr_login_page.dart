@@ -1,22 +1,7 @@
 // lib/features/drive/presentation/pages/qr_login_page.dart
-//
-// QR Login page — fully rewritten to use TdlibService for token generation.
-//
-// Flow:
-//   1. Page calls mtprotoService.startQrLogin()
-//   2. MtprotoService → TdlibService.requestQrLogin()
-//   3. TDLib emits AuthorizationStateWaitOtherDeviceConfirmation
-//   4. TdlibService sets authState = waitingQrScan, currentQrToken = link
-//   5. Page receives the tg:// link and renders the QR code
-//   6. User scans with Telegram → TDLib emits AuthorizationStateReady
-//   7. Page detects authenticated state and pops with user info
-
 import 'dart:async';
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import '../../../../core/services/mtproto_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../providers/drive_providers.dart';
@@ -59,37 +44,45 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
     super.dispose();
   }
 
-  // ── Start QR login flow ───────────────────────────────────
-
   Future<void> _startFlow() async {
-  if (!mounted) return;
-  setState(() => _isStarting = true);
-
-  try {
-    final service = await ref.read(mtprotoServiceProvider.future);
-
-    // FORCE initialization
-    if (!service.isAuthenticated) {
-      await service.startQrLogin();   // This now properly waits inside MtprotoService
-    }
-
-    // Listen for state
-    _authSub = service.authStateStream.listen((state) {
-      if (state == MtprotoAuthState.waitingQrScan) {
-        setState(() => _token = service.currentQrToken);
-      } else if (state == MtprotoAuthState.authenticated) {
-        Navigator.of(context).pop({...});
-      }
+    if (!mounted) return;
+    setState(() {
+      _isStarting = true;
+      _error = null;
+      _token = null;
     });
 
-  } catch (e) {
-    setState(() => _error = _friendlyError(e));
-  } finally {
-    if (mounted) setState(() => _isStarting = false);
-   }
+    try {
+      final service = await ref.read(mtprotoServiceProvider.future);
+
+      // Force initialization + QR login
+      final token = await service.startQrLogin();
+
+      if (mounted) {
+        setState(() => _token = token);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = _friendlyError(e));
+      }
+    } finally {
+      if (mounted) setState(() => _isStarting = false);
+    }
   }
 
-  // ── Build ─────────────────────────────────────────────────
+  String _friendlyError(Object e) {
+    final msg = e.toString().toLowerCase();
+    if (msg.contains('missing_credentials')) {
+      return 'API ID and Hash are required. Go back and enter them.';
+    }
+    if (msg.contains('not_ready') || msg.contains('qr_token_null')) {
+      return 'TDLib not ready. Please try again or restart the app.';
+    }
+    if (msg.contains('timeout') || msg.contains('connection')) {
+      return 'Connection timeout. Check your internet.';
+    }
+    return e.toString().replaceAll('Exception: ', '').replaceAll('MtprotoException: ', '');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -99,17 +92,10 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
         backgroundColor: AppTheme.bgDark,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded,
-              color: AppTheme.textPrimary, size: 20),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: AppTheme.textPrimary, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          'Scan QR to Log In',
-          style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.w700),
-        ),
+        title: const Text('Scan QR to Log In', style: TextStyle(fontWeight: FontWeight.w700)),
       ),
       body: SafeArea(
         child: Padding(
@@ -124,9 +110,10 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
                       _buildQrSection(),
                       const SizedBox(height: 32),
                       _buildInstructions(),
-                      const SizedBox(height: 16),
-                      if (_token != null)
+                      if (_token != null) ...[
+                        const SizedBox(height: 16),
                         _buildDeepLinkCard(),
+                      ],
                     ],
                   ),
                 ),
@@ -140,33 +127,21 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
                       child: OutlinedButton.icon(
                         onPressed: _isStarting ? null : _startFlow,
                         icon: _isStarting
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                    color: AppTheme.primary, strokeWidth: 2))
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                             : const Icon(Icons.refresh_rounded, size: 18),
-                        label: Text(
-                            _isStarting ? 'Connecting…' : 'Refresh QR Code'),
+                        label: Text(_isStarting ? 'Connecting…' : 'Refresh QR Code'),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppTheme.primary,
-                          side: BorderSide(
-                              color: AppTheme.primary.withOpacity(0.5),
-                              width: 1),
+                          side: BorderSide(color: AppTheme.primary.withOpacity(0.5)),
                           padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         ),
                       ),
                     ),
                     const SizedBox(height: 10),
                     TextButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        'Use phone number instead',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 13),
-                      ),
+                      child: const Text('Use phone number instead', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
                     ),
                   ],
                 ),
@@ -177,6 +152,11 @@ class _QrLoginPageState extends ConsumerState<QrLoginPage>
       ),
     );
   }
+
+  // ... (keep your existing _buildQrSection, _buildInstructions, _buildDeepLinkCard, _QrWidget, _QrPainter unchanged)
+  // Just make sure _buildQrSection uses _token?.link
+}
+                              
 
   // ── QR section ────────────────────────────────────────────
 

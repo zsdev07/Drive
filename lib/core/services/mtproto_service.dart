@@ -120,31 +120,31 @@ class MtprotoService {
 
   /// Ensures TdlibService is created and initialised.
   /// Call this before any auth or file operation.
+
   Future<TdlibService> _ensureTdlib() async {
-    if (_tdlib != null) return _tdlib!;
+  if (_tdlib != null) return _tdlib!;
 
-    final id   = await _secure.read(key: AppConstants.secureKeyApiId);
-    final hash = await _secure.read(key: AppConstants.secureKeyApiHash);
+  final id = await _secure.read(key: AppConstants.secureKeyApiId);
+  final hash = await _secure.read(key: AppConstants.secureKeyApiHash);
 
-    if (id == null || id.isEmpty || hash == null || hash.isEmpty) {
-      throw MtprotoException(
-          'API credentials not set. Enter them on the credentials page.',
-          code: 'MISSING_CREDENTIALS');
-    }
+  if (id == null || hash == null || id.isEmpty || hash.isEmpty) {
+    throw MtprotoException('API ID and Hash are required', code: 'MISSING_CREDENTIALS');
+  }
 
-    final apiId = int.tryParse(id);
-    if (apiId == null || apiId == 0) {
-      throw MtprotoException('Invalid API ID: "$id"');
-    }
+  _tdlib = TdlibService();
+  
+  try {
+    await _tdlib!.init(
+      apiId: int.parse(id),
+      apiHash: hash,
+    );
+  } catch (e) {
+    _tdlib = null;
+    rethrow;
+  }
 
-    _tdlib = TdlibService();
-    await _tdlib!.init(apiId: apiId, apiHash: hash);
-
-    // Forward all TDLib auth state changes through our broadcast controller
-    // so callers who subscribed before _tdlib existed still get updates.
-    _tdlib!.authStateStream.listen((state) async {
-      // Broadcast to our own controller first
-      if (!_authStateCtrl.isClosed) _authStateCtrl.add(state);
+  _tdlib!.authStateStream.listen((state) {
+    if (!_authStateCtrl.isClosed) _authStateCtrl.add(state);
 
       if (state == TdlibAuthState.authenticated) {
         // Persist session key when authenticated
